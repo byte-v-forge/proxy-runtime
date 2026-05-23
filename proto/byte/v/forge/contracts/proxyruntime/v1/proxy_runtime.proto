@@ -1,0 +1,246 @@
+syntax = "proto3";
+
+package byte.v.forge.contracts.proxyruntime.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/byte-v-forge/proxy-runtime/gen/byte/v/forge/contracts/proxyruntime/v1;proxyruntimev1";
+
+enum ProxyProtocol {
+  PROXY_PROTOCOL_UNSPECIFIED = 0;
+  PROXY_PROTOCOL_HTTP = 1;
+  PROXY_PROTOCOL_SOCKS5 = 2;
+}
+
+enum ProxyProvider {
+  PROXY_PROVIDER_UNSPECIFIED = 0;
+  PROXY_PROVIDER_STATIC = 1;
+  PROXY_PROVIDER_1024PROXY = 2;
+}
+
+enum ProxyCapability {
+  PROXY_CAPABILITY_UNSPECIFIED = 0;
+  PROXY_CAPABILITY_CHAINING = 1;
+  PROXY_CAPABILITY_POOL_REFRESH = 2;
+  PROXY_CAPABILITY_API_POOL = 3;
+  PROXY_CAPABILITY_STICKY_SESSION = 4;
+  PROXY_CAPABILITY_ACTIVE_SESSION_ROTATION = 5;
+  PROXY_CAPABILITY_USERNAME_PARAMETER_SESSION = 6;
+  PROXY_CAPABILITY_UNIFIED_EGRESS_GATEWAY = 7;
+}
+
+enum ProxySessionMode {
+  PROXY_SESSION_MODE_UNSPECIFIED = 0;
+  PROXY_SESSION_MODE_ROTATING = 1;
+  PROXY_SESSION_MODE_STICKY = 2;
+}
+
+enum ProxyUpstreamKind {
+  PROXY_UPSTREAM_KIND_UNSPECIFIED = 0;
+  PROXY_UPSTREAM_KIND_SIMPLE_PROXY = 1;
+  PROXY_UPSTREAM_KIND_DYNAMIC_IP = 2;
+  PROXY_UPSTREAM_KIND_PROXY_POOL = 3;
+}
+
+enum ProxyRotationMode {
+  PROXY_ROTATION_MODE_UNSPECIFIED = 0;
+  PROXY_ROTATION_MODE_NONE = 1;
+  PROXY_ROTATION_MODE_PER_REQUEST = 2;
+  PROXY_ROTATION_MODE_STICKY_SESSION = 3;
+  PROXY_ROTATION_MODE_SCHEDULED_POOL_REFRESH = 4;
+}
+
+enum ProxySelectorStrategy {
+  PROXY_SELECTOR_STRATEGY_UNSPECIFIED = 0;
+  PROXY_SELECTOR_STRATEGY_ROUND_ROBIN = 1;
+  PROXY_SELECTOR_STRATEGY_RANDOM = 2;
+  PROXY_SELECTOR_STRATEGY_FIFO = 3;
+  PROXY_SELECTOR_STRATEGY_HASH_CLIENT_IP = 4;
+  PROXY_SELECTOR_STRATEGY_HASH_TARGET_HOST = 5;
+}
+
+enum EgressHopRole {
+  EGRESS_HOP_ROLE_UNSPECIFIED = 0;
+  EGRESS_HOP_ROLE_FORWARD = 1;
+  EGRESS_HOP_ROLE_EXIT = 2;
+  EGRESS_HOP_ROLE_CONTROL_PLANE = 3;
+}
+
+enum EgressListenerKind {
+  EGRESS_LISTENER_KIND_UNSPECIFIED = 0;
+  EGRESS_LISTENER_KIND_DIRECT = 1;
+  EGRESS_LISTENER_KIND_PROVIDER_ROUTE = 2;
+}
+
+message ProxySelectorPolicy {
+  ProxySelectorStrategy strategy = 1;
+  uint32 max_fails = 2;
+  string fail_timeout = 3;
+}
+
+message ProxyProviderDescriptor {
+  string provider_id = 1;
+  ProxyProvider provider = 2;
+  string display_name = 3;
+  repeated ProxyCapability capabilities = 4;
+  repeated ProxyProtocol protocols = 5;
+  bool supports_active_new_session = 6;
+  uint32 min_sticky_ttl_minutes = 7;
+  uint32 max_sticky_ttl_minutes = 8;
+  repeated ProxyUpstreamKind upstream_kinds = 9;
+  repeated ProxyRotationMode rotation_modes = 10;
+}
+
+message ProviderControlPlaneAccess {
+  bool uses_proxy = 1;
+  string proxy_ref = 2;
+  repeated ProxyProtocol protocols = 3;
+}
+
+message ProxySessionPolicy {
+  ProxySessionMode mode = 1;
+  string region = 2;
+  string state = 3;
+  string city = 4;
+  string asn = 5;
+  uint32 sticky_ttl_minutes = 6;
+  map<string, string> labels = 7;
+  ProxyUpstreamKind upstream_kind = 8;
+  ProxyRotationMode rotation_mode = 9;
+}
+
+message ProxySession {
+  string session_id = 1;
+  ProxyProvider provider = 2;
+  ProxySessionPolicy policy = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  map<string, string> labels = 6;
+}
+
+message ProxyEndpoint {
+  string id = 1;
+  ProxyProvider provider = 2;
+  ProxyProtocol protocol = 3;
+  string host = 4;
+  uint32 port = 5;
+  string session_id = 6;
+  ProxyUpstreamKind upstream_kind = 7;
+  ProxyRotationMode rotation_mode = 8;
+  map<string, string> labels = 9;
+}
+
+message ProxyPoolSnapshot {
+  string pool_id = 1;
+  ProxyProviderDescriptor provider = 2;
+  ProxySession active_session = 3;
+  repeated ProxyEndpoint endpoints = 4;
+  google.protobuf.Timestamp refreshed_at = 5;
+}
+
+message EgressListener {
+  string listener_id = 1;
+  EgressListenerKind kind = 2;
+  string listen_addr = 3;
+  ProxyProtocol protocol = 4;
+  string route_id = 5;
+  bool managed = 6;
+  map<string, string> labels = 7;
+}
+
+message EgressHop {
+  string hop_id = 1;
+  uint32 order = 2;
+  EgressHopRole role = 3;
+  ProxySelectorPolicy selector = 4;
+  repeated ProxyEndpoint endpoints = 5;
+}
+
+message EgressRoute {
+  string route_id = 1;
+  repeated EgressHop hops = 2;
+}
+
+message EgressGateway {
+  string gateway_id = 1;
+  repeated EgressListener listeners = 2;
+  ProxyPoolSnapshot pool = 4;
+  EgressRoute data_plane_route = 5;
+  EgressRoute control_plane_route = 6;
+  ProviderControlPlaneAccess provider_control_plane = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message ListProxyProvidersRequest {}
+
+message ListProxyProvidersResponse {
+  repeated ProxyProviderDescriptor providers = 1;
+}
+
+message GetEgressGatewayRequest {
+  string gateway_id = 1;
+}
+
+message GetEgressGatewayResponse {
+  EgressGateway gateway = 1;
+}
+
+message GetProxyPoolRequest {
+  string pool_id = 1;
+}
+
+message GetProxyPoolResponse {
+  ProxyPoolSnapshot pool = 1;
+}
+
+message RefreshProxyPoolRequest {
+  string pool_id = 1;
+}
+
+message RefreshProxyPoolResponse {
+  ProxyPoolSnapshot pool = 1;
+}
+
+message CreateProxySessionRequest {
+  string pool_id = 1;
+  string provider_id = 2;
+  ProxySessionPolicy policy = 3;
+  bool force_new = 4;
+}
+
+message CreateProxySessionResponse {
+  ProxySession session = 1;
+  ProxyPoolSnapshot pool = 2;
+}
+
+message ListEgressListenersRequest {
+  string gateway_id = 1;
+}
+
+message ListEgressListenersResponse {
+  repeated EgressListener listeners = 1;
+}
+
+message CreateEgressListenerRequest {
+  string gateway_id = 1;
+  string listener_id = 2;
+  string listen_addr = 3;
+  ProxyProtocol protocol = 4;
+  EgressListenerKind kind = 5;
+  map<string, string> labels = 6;
+}
+
+message CreateEgressListenerResponse {
+  EgressListener listener = 1;
+  EgressGateway gateway = 2;
+}
+
+service ProxyRuntimeService {
+  rpc ListProxyProviders(ListProxyProvidersRequest) returns (ListProxyProvidersResponse);
+  rpc GetEgressGateway(GetEgressGatewayRequest) returns (GetEgressGatewayResponse);
+  rpc GetProxyPool(GetProxyPoolRequest) returns (GetProxyPoolResponse);
+  rpc RefreshProxyPool(RefreshProxyPoolRequest) returns (RefreshProxyPoolResponse);
+  rpc CreateProxySession(CreateProxySessionRequest) returns (CreateProxySessionResponse);
+  rpc ListEgressListeners(ListEgressListenersRequest) returns (ListEgressListenersResponse);
+  rpc CreateEgressListener(CreateEgressListenerRequest) returns (CreateEgressListenerResponse);
+}

@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../../webui/src/*"],
+      "lucide-react": ["../../webui/node_modules/lucide-react/dist/lucide-react.d.ts"],
+      "react": ["../../webui/node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["../../webui/node_modules/@types/react/jsx-runtime.d.ts"]
+    },
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": [],
+    "typeRoots": ["../../webui/node_modules/@types"]
+  },
+  "include": ["src/dashboard"]
+}
