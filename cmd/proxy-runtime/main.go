@@ -48,15 +48,26 @@ func main() {
 }
 
 func buildProvider(cfg config.Config) (provider.Provider, error) {
-	switch cfg.Provider {
-	case config.ProviderNone:
-		return provider.Empty{}, nil
-	case config.ProviderStatic:
-		return provider.NewStatic(cfg.SimpleProxies)
-	case config.ProviderTen24:
-		return ten24.New(cfg.Ten24, buildHTTPClient(cfg)), nil
-	default:
-		return nil, config.ErrUnsupportedProvider
+	for _, plugin := range providerPlugins() {
+		if plugin.key == cfg.Provider {
+			return plugin.build(cfg)
+		}
+	}
+	return nil, config.ErrUnsupportedProvider
+}
+
+type providerPlugin struct {
+	key   string
+	build func(config.Config) (provider.Provider, error)
+}
+
+func providerPlugins() []providerPlugin {
+	return []providerPlugin{
+		{key: config.ProviderNone, build: func(config.Config) (provider.Provider, error) { return provider.Empty{}, nil }},
+		{key: config.ProviderStatic, build: func(cfg config.Config) (provider.Provider, error) { return provider.NewStatic(cfg.SimpleProxies) }},
+		{key: config.ProviderTen24, build: func(cfg config.Config) (provider.Provider, error) {
+			return ten24.New(cfg.Ten24, buildHTTPClient(cfg)), nil
+		}},
 	}
 }
 
