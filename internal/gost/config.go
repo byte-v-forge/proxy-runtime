@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/byte-v-forge/proxy-runtime/internal/config"
 	"github.com/byte-v-forge/proxy-runtime/internal/provider"
 )
 
@@ -141,9 +142,9 @@ func buildListenerConfig(listeners []LocalService, staticChain []*url.URL, pool 
 	for _, listener := range listeners {
 		serviceChain := ""
 		switch normalizeListenerRoute(listener.Route) {
-		case "provider":
+		case config.ListenerRouteProvider:
 			serviceChain = chainName
-		case "upstream":
+		case config.ListenerRouteUpstream:
 			upstreamChain, err := buildUpstreamChain(listener)
 			if err != nil {
 				return Config{}, err
@@ -320,12 +321,12 @@ func normalizeDialer(dialer string) string {
 
 func normalizeListenerRoute(route string) string {
 	switch strings.ToLower(strings.TrimSpace(route)) {
-	case "direct":
-		return "direct"
-	case "upstream":
-		return "upstream"
+	case config.ListenerRouteDirect:
+		return config.ListenerRouteDirect
+	case config.ListenerRouteUpstream:
+		return config.ListenerRouteUpstream
 	default:
-		return "provider"
+		return config.ListenerRouteProvider
 	}
 }
 
