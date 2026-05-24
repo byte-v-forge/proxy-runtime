@@ -67,13 +67,13 @@ func LoadFromEnv() (Config, error) {
 		GostMetricsAddr:   strings.TrimSpace(os.Getenv("PROXY_RUNTIME_GOST_METRICS_ADDR")),
 		CommonEgressAddr:  strings.TrimSpace(os.Getenv("PROXY_RUNTIME_COMMON_EGRESS_ADDR")),
 		LocalAddr:         envDefault("PROXY_RUNTIME_DYNAMIC_EGRESS_ADDR", envDefault("PROXY_RUNTIME_LOCAL_ADDR", ":1080")),
-		LocalProtocol:     envDefault("PROXY_RUNTIME_LOCAL_PROTOCOL", "http"),
+		LocalProtocol:     normalizeConfigToken(envDefault("PROXY_RUNTIME_LOCAL_PROTOCOL", "http")),
 		LocalUsername:     strings.TrimSpace(os.Getenv("PROXY_RUNTIME_LOCAL_USERNAME")),
 		LocalPassword:     strings.TrimSpace(os.Getenv("PROXY_RUNTIME_LOCAL_PASSWORD")),
 		StaticChain:       envList("PROXY_RUNTIME_STATIC_CHAIN"),
 		SimpleProxies:     envList("PROXY_RUNTIME_SIMPLE_PROXIES"),
 		ProviderHTTPProxy: strings.TrimSpace(os.Getenv("PROXY_RUNTIME_PROVIDER_HTTP_PROXY")),
-		Provider:          envDefault("PROXY_RUNTIME_PROVIDER", ProviderTen24),
+		Provider:          normalizeConfigToken(envDefault("PROXY_RUNTIME_PROVIDER", ProviderTen24)),
 		Listeners:         envListeners("PROXY_RUNTIME_LISTENERS_JSON"),
 		RefreshInterval:   envDurationSeconds("PROXY_RUNTIME_REFRESH_SECONDS", 300*time.Second),
 		RequestTimeout:    envDurationSeconds("PROXY_RUNTIME_REQUEST_TIMEOUT_SECONDS", 10*time.Second),
@@ -87,7 +87,7 @@ func LoadFromEnv() (Config, error) {
 			ProxyAddr:     strings.TrimSpace(os.Getenv("PROXY_RUNTIME_1024_PROXY_ADDR")),
 			Username:      strings.TrimSpace(os.Getenv("PROXY_RUNTIME_1024_USERNAME")),
 			Password:      strings.TrimSpace(os.Getenv("PROXY_RUNTIME_1024_PASSWORD")),
-			Protocol:      envDefault("PROXY_RUNTIME_1024_PROTOCOL", "http"),
+			Protocol:      normalizeConfigToken(envDefault("PROXY_RUNTIME_1024_PROTOCOL", "http")),
 			Region:        strings.TrimSpace(os.Getenv("PROXY_RUNTIME_1024_REGION")),
 			State:         strings.TrimSpace(os.Getenv("PROXY_RUNTIME_1024_STATE")),
 			City:          strings.TrimSpace(os.Getenv("PROXY_RUNTIME_1024_CITY")),
@@ -146,14 +146,14 @@ func validateListeners(listeners []EgressListener) error {
 		if strings.TrimSpace(listener.Addr) == "" {
 			return fmt.Errorf("PROXY_RUNTIME_LISTENERS_JSON[%d].addr is required", index)
 		}
-		protocol := listener.Protocol
+		protocol := normalizeConfigToken(listener.Protocol)
 		if protocol == "" {
 			protocol = "http"
 		}
 		if !isLocalProtocol(protocol) {
 			return fmt.Errorf("unsupported listener protocol %q", listener.Protocol)
 		}
-		route := strings.TrimSpace(listener.Route)
+		route := normalizeConfigToken(listener.Route)
 		switch route {
 		case "", ListenerRouteProvider, ListenerRouteDirect, ListenerRouteUpstream:
 		default:
@@ -215,13 +215,17 @@ func envListeners(name string) []EgressListener {
 	for index := range listeners {
 		listeners[index].ID = strings.TrimSpace(listeners[index].ID)
 		listeners[index].Addr = strings.TrimSpace(listeners[index].Addr)
-		listeners[index].Protocol = strings.TrimSpace(listeners[index].Protocol)
-		listeners[index].Route = strings.TrimSpace(listeners[index].Route)
+		listeners[index].Protocol = normalizeConfigToken(listeners[index].Protocol)
+		listeners[index].Route = normalizeConfigToken(listeners[index].Route)
 		listeners[index].Upstream = strings.TrimSpace(listeners[index].Upstream)
 		listeners[index].Username = strings.TrimSpace(listeners[index].Username)
 		listeners[index].Password = strings.TrimSpace(listeners[index].Password)
 	}
 	return listeners
+}
+
+func normalizeConfigToken(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func envDurationSeconds(name string, fallback time.Duration) time.Duration {
