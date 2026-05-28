@@ -2,17 +2,24 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/byte-v-forge/common-lib/httpclient"
+	"github.com/byte-v-forge/common-lib/proxyurl"
 	"github.com/byte-v-forge/proxy-runtime/internal/app"
 	"github.com/byte-v-forge/proxy-runtime/internal/config"
+	"github.com/byte-v-forge/proxy-runtime/internal/dataplane"
+	"github.com/byte-v-forge/proxy-runtime/internal/dataplane/gostplane"
 	"github.com/byte-v-forge/proxy-runtime/internal/gost"
 	"github.com/byte-v-forge/proxy-runtime/internal/provider"
 	"github.com/byte-v-forge/proxy-runtime/internal/provider/ten24"
+	"github.com/byte-v-forge/proxy-runtime/internal/sourceplane"
+	mihomosource "github.com/byte-v-forge/proxy-runtime/internal/sourceplane/mihomo"
 )
 
 func main() {
@@ -30,13 +37,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	manager := gost.NewManager(gost.ManagerConfig{
-		GostPath:    cfg.GostPath,
-		ConfigDir:   cfg.GostConfigDir,
-		APIAddr:     cfg.GostAPIAddr,
-		MetricsAddr: cfg.GostMetricsAddr,
-	}, logger)
-	runtime := app.NewRuntime(cfg, proxyProvider, manager, logger)
+	routePlane, err := buildRoutePlane(cfg, logger)
+	if err != nil {
+		logger.Error("create route runtime failed", "error", err)
+		os.Exit(1)
+	}
+	sourcePlane, err := buildSourcePlane(cfg, logger)
+	if err != nil {
+		logger.Error("create source runtime failed", "error", err)
+		os.Exit(1)
+	}
+	store, err := app.NewPostgresStore(context.Background(), cfg, logger)
+	if err != nil {
+		logger.Error("create store failed", "error", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+	leaseStore, err := app.NewLeaseStore(context.Background(), cfg)
+	if err != nil {
+		logger.Error("create lease cache failed", "error", err)
+		os.Exit(1)
+	}
+	defer leaseStore.Close()
+	runtime := app.NewRuntime(cfg, proxyProvider, routePlane, sourcePlane, store, leaseStore, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -44,6 +67,33 @@ func main() {
 	if err := runtime.Run(ctx); err != nil {
 		logger.Error("proxy runtime stopped", "error", err)
 		os.Exit(1)
+	}
+}
+
+func buildRoutePlane(cfg config.Config, logger *slog.Logger) (dataplane.Driver, error) {
+	if cfg.RouteRuntime != config.RouteRuntimeGOST {
+		return nil, fmt.Errorf("unsupported route runtime %q", cfg.RouteRuntime)
+	}
+	return gostplane.New(gost.ManagerConfig{
+		GostPath:    cfg.GostPath,
+		ConfigDir:   cfg.GostConfigDir,
+		APIAddr:     cfg.GostAPIAddr,
+		MetricsAddr: cfg.GostMetricsAddr,
+	}, logger), nil
+}
+
+func buildSourcePlane(cfg config.Config, logger *slog.Logger) (sourceplane.Driver, error) {
+	switch cfg.SourceRuntime {
+	case config.SourceRuntimeNone:
+		return sourceplane.Empty{}, nil
+	case config.SourceRuntimeMihomo:
+		return mihomosource.New(mihomosource.Config{
+			Path:      cfg.Mihomo.Path,
+			ConfigDir: cfg.Mihomo.ConfigDir,
+			APIAddr:   cfg.Mihomo.APIAddr,
+		}, logger), nil
+	default:
+		return nil, fmt.Errorf("unsupported source runtime %q", cfg.SourceRuntime)
 	}
 }
 
@@ -72,14 +122,16 @@ func providerPlugins() []providerPlugin {
 }
 
 func buildHTTPClient(cfg config.Config) *http.Client {
-	client := &http.Client{Timeout: cfg.RequestTimeout}
-	if cfg.ProviderHTTPProxy == "" {
-		return client
+	proxyURL := ""
+	if cfg.ProviderHTTPProxy != "" {
+		parsed, err := proxyurl.Parse(cfg.ProviderHTTPProxy, "http")
+		if err == nil {
+			proxyURL = parsed.String()
+		}
 	}
-	proxyURL, err := provider.ParseProxy(cfg.ProviderHTTPProxy, "http")
+	client, err := httpclient.NewWithSchemes(cfg.RequestTimeout, proxyURL, httpclient.HTTPProxySchemes...)
 	if err != nil {
-		return client
+		return &http.Client{Timeout: cfg.RequestTimeout}
 	}
-	client.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	return client
 }

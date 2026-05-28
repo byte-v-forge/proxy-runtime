@@ -1,5 +1,5 @@
-import { Badge, EmptyBlock, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/dashboard/module-kit';
-import type { ProxyEndpoint } from './proto/byte/v/forge/contracts/proxyruntime/v1/proxy_runtime';
+import { Badge, EmptyBlock, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@byte-v-forge/common-ui';
+import type { ProxyEndpoint } from '@byte-v-forge/common-ui/proto/byte/v/forge/contracts/proxyruntime/v1/proxy_runtime';
 import { endpointAddr, enumLabel } from './labels';
 
 export function EndpointTable({ endpoints }: { endpoints: ProxyEndpoint[] }) {

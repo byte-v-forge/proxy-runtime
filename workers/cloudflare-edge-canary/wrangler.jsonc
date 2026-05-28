@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "byte-v-forge-edge-canary",
+  "main": "src/index.js",
+  "compatibility_date": "2026-05-13",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true,
+  "vars": {
+    "CANARY_PATH": "/edge-canary"
+  }
+}

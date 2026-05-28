@@ -16,12 +16,12 @@ type Config struct {
 	Username      string
 	Password      string
 	Protocol      string
-	Region        string
-	State         string
-	City          string
-	ASN           string
 	SessionID     string
 	StickyMinutes int
+}
+
+func (c Config) HasRuntimeConfig() bool {
+	return c.APIURL != "" || c.ProxyAddr != "" || c.Username != "" || c.Password != "" || c.SessionID != ""
 }
 
 func (c Config) Validate() error {
@@ -36,9 +36,6 @@ func (c Config) Validate() error {
 	}
 	if c.Password == "" {
 		return errors.New("PROXY_RUNTIME_1024_PASSWORD is required")
-	}
-	if c.ASN != "" && (c.State != "" || c.City != "") {
-		return errors.New("1024proxy ASN cannot be combined with state or city")
 	}
 	if c.StickyMinutes != 0 {
 		if c.StickyMinutes < 1 || c.StickyMinutes > 120 {

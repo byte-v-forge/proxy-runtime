@@ -1,0 +1,102 @@
+.proxySourceGrid,
+.proxyLeaseGrid {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.proxySourceGrid {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+
+.proxyLeaseGrid {
+  max-height: 360px;
+  overflow: auto;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.proxySourceTile,
+.proxyLeaseCard {
+  min-width: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--primary) 6%);
+}
+
+.proxySourceTile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  padding: 12px;
+}
+
+.proxySourceTile h4,
+.proxyLeaseHeader h4 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.proxySourceTile p,
+.proxySourceTile small,
+.proxyLeaseHeader p,
+.proxyLeaseFacts span {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.proxySourceTile small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proxyLeaseCard {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.proxyLeaseHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.proxyLeaseFacts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.proxyLeaseFacts div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.proxyLeaseFacts strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.proxyLeaseSignals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 680px) {
+  .proxyLeaseFacts {
+    grid-template-columns: 1fr;
+  }
+}

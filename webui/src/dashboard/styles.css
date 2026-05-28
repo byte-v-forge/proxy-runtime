@@ -1,15 +1,61 @@
-.proxyRuntimeWorkspace {
-  grid-template-columns: minmax(0, 1fr);
+@import "tailwindcss";
+@source "./";
+@source "../../../../common-lib/ui/src";
+@import "@byte-v-forge/common-ui/styles.css";
+@import "./overview-cards.css";
+
+.proxyOverviewShell {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 14px;
+  background: radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--primary) 10%, transparent), transparent 32%), var(--surface-soft);
 }
-.proxyRuntimePanel {
-  min-width: 0;
+.proxyOverviewHero,
+.proxySection {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.proxyOverviewHero > div:first-child,
+.proxySectionHeader {
+  padding: 14px 16px;
+}
+.proxyOverviewHero h3,
+.proxySectionHeader h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 750;
+}
+.proxyOverviewHero p,
+.proxySectionHeader p {
+  margin: 3px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
 }
 .proxyOverview {
   display: grid;
   grid-template-columns: repeat(4, minmax(130px, 1fr)) minmax(220px, 1.4fr);
   gap: 1px;
-  border-bottom: 1px solid var(--border-soft);
+  border-top: 1px solid var(--border-soft);
   background: var(--border-soft);
+}
+.proxyOverviewGrid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.proxySection {
+  display: grid;
+}
+.proxySectionHeader {
+  border-bottom: 1px solid var(--border-soft);
 }
 .proxyMetric,
 .proxyCapabilities {
@@ -24,24 +70,34 @@
 .proxyMetric span,
 .proxyMetric small,
 .proxyHopMeta,
-.proxyRouteTitle span,
-.proxySessionCurrent dt {
+.proxyRouteTitle span {
   color: var(--muted-foreground);
   font-size: 12px;
 }
-.proxyMetric strong {
+.proxyMetric strong,
+.proxyHopHeader strong,
+.proxyHopEndpoints span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.proxyMetric strong {
   font-size: 15px;
 }
-.proxyCapabilities {
+.proxyCapabilities,
+.proxySourceBadges {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.proxyCapabilities {
   align-items: center;
   align-content: center;
-  flex-wrap: wrap;
   gap: 6px;
+}
+.proxySourceBadges {
+  padding: 14px;
 }
 .proxyRoutePane {
   min-height: 0;
@@ -53,19 +109,40 @@
   padding: 14px;
   background: var(--surface-soft);
 }
+.proxyNodeGrid {
+  max-height: 76vh;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  padding: 2px;
+}
+.proxyNodeCard {
+  min-width: 0;
+  border-color: var(--border-soft);
+  box-shadow: none;
+}
 .proxyRouteSection {
   display: grid;
   gap: 10px;
 }
-.proxyRouteTitle {
+.proxyRouteTitle,
+.proxyHopHeader,
+.proxyHopMeta {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.proxyRouteTitle {
   font-size: 13px;
   font-weight: 700;
 }
 .proxyRouteTitle span {
   font-weight: 500;
+}
+.proxyHopHeader,
+.proxyHopMeta {
+  justify-content: space-between;
 }
 .proxyHopRail {
   display: flex;
@@ -90,31 +167,11 @@
   align-content: start;
   gap: 8px;
 }
-.proxyHopHeader,
-.proxyHopMeta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.proxyHopHeader strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .proxyHopEndpoints {
   display: grid;
   gap: 5px;
 }
-.proxyHopEndpoints span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--faint);
-  font-size: 12px;
-}
+.proxyHopEndpoints span { color: var(--faint); font-size: 12px; }
 .proxyHopArrow {
   color: var(--muted-foreground);
   flex: 0 0 auto;
@@ -129,69 +186,10 @@
 .proxyTableWrap td {
   white-space: nowrap;
 }
-.proxyMono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-}
-.proxySessionPane {
-  min-height: 0;
-  height: 100%;
-  overflow: auto;
-  display: grid;
-  grid-template-columns: minmax(260px, .75fr) minmax(0, 1fr);
-  gap: 16px;
-  padding: 14px;
-  background: var(--surface-soft);
-}
-.proxySessionCurrent,
-.proxySessionForm {
-  border: 1px solid var(--border-soft);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 14px;
-}
-.proxySessionCurrent h3 {
-  margin: 0 0 12px;
-  font-size: 14px;
-}
-.proxySessionCurrent dl {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-}
-.proxySessionCurrent div,
-.proxyField {
-  display: grid;
-  gap: 5px;
-}
-.proxySessionCurrent dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.proxySessionForm {
-  display: grid;
-  align-content: start;
-  gap: 14px;
-}
+.proxyMono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
 .proxyFormGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.dark .proxyMetric,
-.dark .proxyCapabilities,
-.dark .proxyHop,
-.dark .proxySessionCurrent,
-.dark .proxySessionForm {
-  background: var(--surface);
-}
-@media (max-width: 920px) {
-  .proxyOverview,
-  .proxySessionPane {
-    grid-template-columns: 1fr;
-  }
-  .proxyFormGrid {
-    grid-template-columns: 1fr;
-  }
-}
+@media (max-width: 920px) { .proxyOverview, .proxyOverviewGrid, .proxyFormGrid { grid-template-columns: 1fr; } }

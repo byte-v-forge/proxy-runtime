@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/byte-v-forge/common-lib/proxyurl"
 	"github.com/byte-v-forge/proxy-runtime/internal/config"
 	"github.com/byte-v-forge/proxy-runtime/internal/provider"
 )
@@ -91,6 +92,12 @@ type EgressConfig struct {
 	DynamicViaCommon bool
 }
 
+type SessionRoute struct {
+	SessionID string
+	Listener  LocalService
+	Pool      []provider.Node
+}
+
 func BuildEgressConfig(opts EgressConfig) (Config, error) {
 	if len(opts.Listeners) > 0 {
 		return buildListenerConfig(opts.Listeners, opts.StaticChain, opts.Pool)
@@ -110,7 +117,7 @@ func BuildEgressConfig(opts EgressConfig) (Config, error) {
 		staticChain = append([]*url.URL{commonURL}, staticChain...)
 	}
 
-	chain, err := buildChain(staticChain, opts.Pool)
+	chain, err := buildChain("default-chain", staticChain, opts.Pool)
 	if err != nil {
 		return Config{}, err
 	}
@@ -129,7 +136,7 @@ func BuildEgressConfig(opts EgressConfig) (Config, error) {
 }
 
 func buildListenerConfig(listeners []LocalService, staticChain []*url.URL, pool []provider.Node) (Config, error) {
-	chain, err := buildChain(staticChain, pool)
+	chain, err := buildChain("default-chain", staticChain, pool)
 	if err != nil {
 		return Config{}, err
 	}
@@ -157,6 +164,16 @@ func buildListenerConfig(listeners []LocalService, staticChain []*url.URL, pool 
 	return cfg, nil
 }
 
+func BuildSessionRoute(chainID string, listener LocalService, staticChain []*url.URL, pool []provider.Node) (Service, Chain, error) {
+	chainName := safeChainName(chainID)
+	chain, err := buildChain(chainName, staticChain, pool)
+	if err != nil {
+		return Service{}, Chain{}, err
+	}
+	service := buildService(listener, "proxy-runtime-session", chain.Name)
+	return service, chain, nil
+}
+
 func buildService(local LocalService, fallbackName string, chainName string) Service {
 	name := strings.TrimSpace(local.Name)
 	if name == "" {
@@ -177,8 +194,8 @@ func buildService(local LocalService, fallbackName string, chainName string) Ser
 	}
 }
 
-func buildChain(staticChain []*url.URL, pool []provider.Node) (Chain, error) {
-	chain := Chain{Name: "default-chain"}
+func buildChain(name string, staticChain []*url.URL, pool []provider.Node) (Chain, error) {
+	chain := Chain{Name: name}
 	for index, upstream := range staticChain {
 		node, err := nodeFromURL(fmt.Sprintf("static-%d", index), upstream)
 		if err != nil {
@@ -204,7 +221,7 @@ func buildChain(staticChain []*url.URL, pool []provider.Node) (Chain, error) {
 }
 
 func buildUpstreamChain(listener LocalService) (Chain, error) {
-	proxyURL, err := provider.ParseProxy(listener.Upstream, "http")
+	proxyURL, err := proxyurl.Parse(listener.Upstream, "http")
 	if err != nil {
 		return Chain{}, fmt.Errorf("parse listener %q upstream: %w", listener.Name, err)
 	}
@@ -238,6 +255,9 @@ func safeChainName(value string) string {
 	name := strings.Trim(out.String(), "-")
 	if name == "" {
 		name = "listener-upstream"
+	}
+	if strings.HasSuffix(name, "-chain") {
+		return name
 	}
 	return name + "-chain"
 }

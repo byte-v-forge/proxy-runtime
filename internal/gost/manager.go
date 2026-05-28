@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -109,6 +112,110 @@ func (m *Manager) Reload(ctx context.Context, cfg Config) error {
 		return err
 	}
 	return nil
+}
+
+func (m *Manager) UpsertRoute(ctx context.Context, service Service, chain Chain) error {
+	if m.cfg.APIAddr == "" {
+		return errors.New("gost api is required for dynamic route update")
+	}
+	if len(chain.Hops) > 0 {
+		if err := m.putOrCreate(ctx, "chains", chain.Name, chain); err != nil {
+			return err
+		}
+	}
+	if err := m.putOrCreate(ctx, "services", service.Name, service); err != nil {
+		return err
+	}
+	return waitForServices(ctx, []Service{service}, 3*time.Second)
+}
+
+func (m *Manager) DeleteRoute(ctx context.Context, serviceName string, chainName string) error {
+	if m.cfg.APIAddr == "" {
+		return errors.New("gost api is required for dynamic route delete")
+	}
+	if serviceName != "" {
+		if err := m.deleteConfigObject(ctx, "services", serviceName); err != nil {
+			return err
+		}
+	}
+	if chainName != "" {
+		if err := m.deleteConfigObject(ctx, "chains", chainName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) putOrCreate(ctx context.Context, kind string, name string, payload any) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	status, text, err := m.request(ctx, http.MethodPut, fmt.Sprintf("/config/%s/%s", kind, name), body)
+	if err != nil {
+		return err
+	}
+	if status >= 200 && status < 300 {
+		return nil
+	}
+	if !isConfigObjectNotFound(status, text) {
+		return fmt.Errorf("gost update %s/%s returned HTTP %d: %s", kind, name, status, text)
+	}
+	status, text, err = m.request(ctx, http.MethodPost, "/config/"+kind, body)
+	if err != nil {
+		return err
+	}
+	if status >= 200 && status < 300 {
+		return nil
+	}
+	return fmt.Errorf("gost create %s/%s returned HTTP %d: %s", kind, name, status, text)
+}
+
+func (m *Manager) deleteConfigObject(ctx context.Context, kind string, name string) error {
+	status, text, err := m.request(ctx, http.MethodDelete, fmt.Sprintf("/config/%s/%s", kind, name), nil)
+	if err != nil {
+		return err
+	}
+	if isConfigObjectNotFound(status, text) || status == http.StatusNoContent || status == http.StatusOK {
+		return nil
+	}
+	if status >= 200 && status < 300 {
+		return nil
+	}
+	return fmt.Errorf("gost delete %s/%s returned HTTP %d: %s", kind, name, status, text)
+}
+
+func isConfigObjectNotFound(status int, text string) bool {
+	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
+		return true
+	}
+	if status != http.StatusBadRequest {
+		return false
+	}
+	text = strings.ToLower(text)
+	return strings.Contains(text, "40004") || strings.Contains(text, "not found")
+}
+
+func (m *Manager) request(ctx context.Context, method string, path string, body []byte) (int, string, error) {
+	url := "http://" + m.cfg.APIAddr + path
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	if err != nil {
+		return 0, "", err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode, string(respBody), nil
 }
 
 func (m *Manager) Stop() {

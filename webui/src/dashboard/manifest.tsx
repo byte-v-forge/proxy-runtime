@@ -1,5 +1,5 @@
 import { Network } from 'lucide-react';
-import { DashboardNavSection, type DashboardModuleRegistration } from '@/dashboard/module-kit';
+import { DashboardNavSection, type DashboardModuleRegistration } from '@byte-v-forge/common-ui';
 import { ProxyRuntimePage } from './proxy-runtime-page';
 import './styles.css';
 
@@ -11,7 +11,7 @@ const registration: DashboardModuleRegistration = {
         key: 'proxy-runtime',
         label: '出口网关',
         icon: 'proxy-runtime',
-        section: DashboardNavSection.DASHBOARD_NAV_SECTION_MAIN,
+        section: DashboardNavSection.DASHBOARD_NAV_SECTION_INFRASTRUCTURE,
         required_services: ['proxy-runtime'],
         order: 28
       }

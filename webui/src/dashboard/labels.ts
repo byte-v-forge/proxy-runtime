@@ -1,19 +1,38 @@
 import {
   EgressHopRole,
+  ProxyRouteRuntimeKind,
+  ProxySourceRuntimeKind,
+  ProxyDynamicLeaseStatus,
   ProxyCapability,
-  ProxyProvider,
+  ProxyProviderAccountStatus,
   ProxyProtocol,
   ProxyRotationMode,
   ProxySelectorStrategy,
   ProxySessionMode,
+  ProxySourceKind,
+  ProxySourceNodeStatus,
   ProxyUpstreamKind
-} from './proto/byte/v/forge/contracts/proxyruntime/v1/proxy_runtime';
+} from '@byte-v-forge/common-ui/proto/byte/v/forge/contracts/proxyruntime/v1/proxy_runtime';
 
 const labels: Record<string, string> = {
-  [ProxyProvider.PROXY_PROVIDER_STATIC]: 'Static',
-  [ProxyProvider.PROXY_PROVIDER_1024PROXY]: '1024Proxy',
   [ProxyProtocol.PROXY_PROTOCOL_HTTP]: 'HTTP',
   [ProxyProtocol.PROXY_PROTOCOL_SOCKS5]: 'SOCKS5',
+  [ProxyRouteRuntimeKind.PROXY_ROUTE_RUNTIME_KIND_GOST]: 'GOST',
+  [ProxySourceRuntimeKind.PROXY_SOURCE_RUNTIME_KIND_NONE]: 'None',
+  [ProxySourceRuntimeKind.PROXY_SOURCE_RUNTIME_KIND_MIHOMO]: 'Mihomo',
+  [ProxySourceKind.PROXY_SOURCE_KIND_FIXED_PROXY]: '固定代理',
+  [ProxySourceKind.PROXY_SOURCE_KIND_SUBSCRIPTION]: '订阅',
+  [ProxySourceKind.PROXY_SOURCE_KIND_API_POOL]: 'API 池',
+  [ProxySourceKind.PROXY_SOURCE_KIND_DYNAMIC_IP]: '动态 IP',
+  [ProxyProviderAccountStatus.PROXY_PROVIDER_ACCOUNT_STATUS_ENABLED]: '启用',
+  [ProxyProviderAccountStatus.PROXY_PROVIDER_ACCOUNT_STATUS_DISABLED]: '停用',
+  [ProxyDynamicLeaseStatus.PROXY_DYNAMIC_LEASE_STATUS_ACTIVE]: 'Active',
+  [ProxyDynamicLeaseStatus.PROXY_DYNAMIC_LEASE_STATUS_EXPIRED]: 'Expired',
+  [ProxyDynamicLeaseStatus.PROXY_DYNAMIC_LEASE_STATUS_FAILED]: 'Failed',
+  [ProxyDynamicLeaseStatus.PROXY_DYNAMIC_LEASE_STATUS_RELEASED]: 'Released',
+  [ProxySourceNodeStatus.PROXY_SOURCE_NODE_STATUS_UNKNOWN]: 'Unknown',
+  [ProxySourceNodeStatus.PROXY_SOURCE_NODE_STATUS_AVAILABLE]: 'Available',
+  [ProxySourceNodeStatus.PROXY_SOURCE_NODE_STATUS_UNAVAILABLE]: 'Unavailable',
   [ProxyUpstreamKind.PROXY_UPSTREAM_KIND_SIMPLE_PROXY]: '简单代理',
   [ProxyUpstreamKind.PROXY_UPSTREAM_KIND_DYNAMIC_IP]: '动态IP',
   [ProxyUpstreamKind.PROXY_UPSTREAM_KIND_PROXY_POOL]: '代理池',
@@ -37,7 +56,9 @@ const labels: Record<string, string> = {
   [ProxyCapability.PROXY_CAPABILITY_STICKY_SESSION]: 'Sticky session',
   [ProxyCapability.PROXY_CAPABILITY_ACTIVE_SESSION_ROTATION]: 'Active session',
   [ProxyCapability.PROXY_CAPABILITY_USERNAME_PARAMETER_SESSION]: 'Username session',
-  [ProxyCapability.PROXY_CAPABILITY_UNIFIED_EGRESS_GATEWAY]: 'Egress gateway'
+  [ProxyCapability.PROXY_CAPABILITY_UNIFIED_EGRESS_GATEWAY]: 'Egress gateway',
+  [ProxyCapability.PROXY_CAPABILITY_DYNAMIC_LEASE]: 'Dynamic lease',
+  [ProxyCapability.PROXY_CAPABILITY_SUBSCRIPTION_PROVIDER]: 'Subscription'
 };
 
 export function enumLabel(value: string | undefined) {

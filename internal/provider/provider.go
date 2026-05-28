@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	proxyruntimev1 "github.com/byte-v-forge/proxy-runtime/gen/byte/v/forge/contracts/proxyruntime/v1"
+	proxyruntimev1 "github.com/byte-v-forge/common-lib/gen/go/byte/v/forge/contracts/proxyruntime/v1"
 )
 
 var ErrUnsupportedCapability = errors.New("proxy provider does not support requested capability")
@@ -16,7 +16,7 @@ var ErrUnsupportedCapability = errors.New("proxy provider does not support reque
 type Node struct {
 	ID           string
 	URL          *url.URL
-	Provider     proxyruntimev1.ProxyProvider
+	ProviderID   string
 	SessionID    string
 	UpstreamKind proxyruntimev1.ProxyUpstreamKind
 	RotationMode proxyruntimev1.ProxyRotationMode
@@ -38,7 +38,7 @@ func (n Node) Endpoint() *proxyruntimev1.ProxyEndpoint {
 	host, port := splitHostPort(n.URL)
 	return &proxyruntimev1.ProxyEndpoint{
 		Id:           n.ID,
-		Provider:     n.Provider,
+		ProviderId:   n.ProviderID,
 		Protocol:     protocolFromURL(n.URL),
 		Host:         host,
 		Port:         port,
@@ -52,20 +52,26 @@ func (n Node) Endpoint() *proxyruntimev1.ProxyEndpoint {
 type Provider interface {
 	Name() string
 	Descriptor() *proxyruntimev1.ProxyProviderDescriptor
+	Sources() []*proxyruntimev1.ProxySourceDescriptor
+	RequiresSessionLease() bool
 	Fetch(ctx context.Context, session *proxyruntimev1.ProxySession) ([]Node, error)
-	CreateSession(ctx context.Context, req *proxyruntimev1.CreateProxySessionRequest) (*proxyruntimev1.ProxySession, error)
+	CreateSession(ctx context.Context, req *proxyruntimev1.AcquireProxyLeaseRequest) (*proxyruntimev1.ProxySession, error)
 }
 
 type Empty struct{}
 
+const (
+	EmptyProviderID  = "none"
+	StaticProviderID = "static"
+)
+
 func (Empty) Name() string {
-	return "none"
+	return EmptyProviderID
 }
 
 func (Empty) Descriptor() *proxyruntimev1.ProxyProviderDescriptor {
 	return &proxyruntimev1.ProxyProviderDescriptor{
-		ProviderId:  "none",
-		Provider:    proxyruntimev1.ProxyProvider_PROXY_PROVIDER_UNSPECIFIED,
+		ProviderId:  EmptyProviderID,
 		DisplayName: "No provider",
 		Capabilities: []proxyruntimev1.ProxyCapability{
 			proxyruntimev1.ProxyCapability_PROXY_CAPABILITY_CHAINING,
@@ -77,11 +83,19 @@ func (Empty) Descriptor() *proxyruntimev1.ProxyProviderDescriptor {
 	}
 }
 
+func (Empty) Sources() []*proxyruntimev1.ProxySourceDescriptor {
+	return nil
+}
+
+func (Empty) RequiresSessionLease() bool {
+	return false
+}
+
 func (Empty) Fetch(context.Context, *proxyruntimev1.ProxySession) ([]Node, error) {
 	return nil, nil
 }
 
-func (Empty) CreateSession(context.Context, *proxyruntimev1.CreateProxySessionRequest) (*proxyruntimev1.ProxySession, error) {
+func (Empty) CreateSession(context.Context, *proxyruntimev1.AcquireProxyLeaseRequest) (*proxyruntimev1.ProxySession, error) {
 	return nil, ErrUnsupportedCapability
 }
 

@@ -1,13 +1,13 @@
 import { ArrowRight, Route } from 'lucide-react';
-import { Badge, EmptyBlock } from '@/dashboard/module-kit';
-import type { EgressGateway, EgressHop, EgressRoute } from './proto/byte/v/forge/contracts/proxyruntime/v1/proxy_runtime';
+import { Badge, EmptyBlock } from '@byte-v-forge/common-ui';
+import type { EgressGateway, EgressHop, EgressRoute } from '@byte-v-forge/common-ui/proto/byte/v/forge/contracts/proxyruntime/v1/proxy_runtime';
 import { endpointAddr, enumLabel } from './labels';
 
 export function RouteMap({ gateway }: { gateway?: EgressGateway }) {
   if (!gateway) return <EmptyBlock text="暂无网关数据。proxy-runtime 尚未返回出口网关快照。" />;
   return (
     <div className="proxyRoutePane">
-      <RouteSection title="Data plane" route={gateway.data_plane_route} />
+      <RouteSection title="Route plane" route={gateway.data_plane_route} />
       <RouteSection title="Control plane" route={gateway.control_plane_route} />
     </div>
   );
