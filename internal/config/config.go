@@ -147,7 +147,7 @@ func LoadFromEnv() (Config, error) {
 		Listeners:           envListeners("PROXY_RUNTIME_LISTENERS_JSON"),
 		RefreshInterval:     envx.DurationSeconds("PROXY_RUNTIME_REFRESH_SECONDS", 300*time.Second),
 		RequestTimeout:      envx.DurationSeconds("PROXY_RUNTIME_REQUEST_TIMEOUT_SECONDS", 10*time.Second),
-		ProxyExitGeoTimeout: envx.DurationSeconds("PROXY_RUNTIME_PROXY_EXIT_GEO_TIMEOUT_SECONDS", 5*time.Second),
+		ProxyExitGeoTimeout: envx.DurationSeconds("PROXY_RUNTIME_PROXY_EXIT_GEO_TIMEOUT_SECONDS", 2*time.Second),
 		ProxyExitGeoURLs:    proxyExitGeoURLs("PROXY_RUNTIME_PROXY_EXIT_GEO_URLS"),
 		EdgeCanaryTimeout:   envx.DurationSeconds("PROXY_RUNTIME_EDGE_CANARY_TIMEOUT_SECONDS", 10*time.Second),
 		IPFraud: IPFraudConfig{
