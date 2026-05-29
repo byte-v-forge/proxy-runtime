@@ -45,6 +45,6 @@ function SourceTiles({ sources }: { sources: NonNullable<ProxyPoolSnapshot['sour
 function sourceSummary(source: NonNullable<ProxyPoolSnapshot['sources']>[number]) {
   if (source.subscription) return `${source.subscription.health_check_url || 'no health'} · ${source.subscription.region_codes?.join(',') || 'all regions'}`;
   if (source.fixed_proxy) return `${source.fixed_proxy.endpoint_count} endpoint · ${source.fixed_proxy.region_codes?.join(',') || 'all regions'}`;
-  if (source.dynamic_ip) return `${source.dynamic_ip.provider_account_id} · ${source.dynamic_ip.min_sticky_ttl || '-'}-${source.dynamic_ip.max_sticky_ttl || '-'}`;
+  if (source.dynamic_ip) return `dynamic lease · ${source.dynamic_ip.min_sticky_ttl || '-'}-${source.dynamic_ip.max_sticky_ttl || '-'}`;
   return source.source_id;
 }

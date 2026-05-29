@@ -108,6 +108,8 @@ export function RuntimeSettingsPanel({ onSaved, onError }: { onSaved?: () => voi
             provider={field}
             keyStatus={providerKeyStatus(query.data?.settings, field.kind)}
             label={catalog.find((item) => item.kind === field.kind)?.display_name || field.id}
+            supportsAnonymous={catalog.find((item) => item.kind === field.kind)?.supports_anonymous ?? true}
+            supportsApiKey={catalog.find((item) => item.kind === field.kind)?.supports_api_key ?? true}
             onRemove={() => fieldArray.remove(index)}
             index={index}
           />
@@ -128,11 +130,13 @@ type ProviderRowProps = {
   provider: ProviderForm & { fieldId: string };
   keyStatus: string;
   label: string;
+  supportsAnonymous: boolean;
+  supportsApiKey: boolean;
   onRemove: () => void;
   index: number;
 };
 
-function ProviderRow({ control, register, provider, keyStatus, label, onRemove, index }: ProviderRowProps) {
+function ProviderRow({ control, register, provider, keyStatus, label, supportsAnonymous, supportsApiKey, onRemove, index }: ProviderRowProps) {
   return (
     <div className="grid gap-3 rounded-md border border-[var(--border-soft)] p-3">
       <input type="hidden" {...register(`providers.${index}.id` as const)} />
@@ -144,24 +148,24 @@ function ProviderRow({ control, register, provider, keyStatus, label, onRemove, 
         </div>
         <Button type="button" onClick={onRemove}>删除</Button>
       </div>
-      <div className="grid gap-3 md:grid-cols-[180px_120px_1fr]">
+      <div className={supportsApiKey ? 'grid gap-3 md:grid-cols-[180px_120px_1fr]' : 'grid gap-3 md:grid-cols-[180px_120px]'}>
         <DashboardField label="模式">
-          <Controller control={control} name={`providers.${index}.mode` as const} render={({ field }) => <ModeSelect value={field.value} onChange={field.onChange} />} />
+          <Controller control={control} name={`providers.${index}.mode` as const} render={({ field }) => <ModeSelect supportsAnonymous={supportsAnonymous} supportsApiKey={supportsApiKey} value={field.value} onChange={field.onChange} />} />
         </DashboardField>
         <DashboardField label="权重"><Input min={1} type="number" {...register(`providers.${index}.weight` as const, { valueAsNumber: true })} /></DashboardField>
-        <DashboardField label="API Keys"><Textarea placeholder="每行一个 key；留空保留已配置密钥" rows={3} {...register(`providers.${index}.keys` as const)} /></DashboardField>
+        {supportsApiKey ? <DashboardField label="API Keys"><Textarea placeholder="每行一个 key；留空保留已配置密钥" rows={3} {...register(`providers.${index}.keys` as const)} /></DashboardField> : null}
       </div>
     </div>
   );
 }
 
-function ModeSelect({ value, onChange }: { value: ProviderMode; onChange: (value: ProviderMode) => void }) {
+function ModeSelect({ supportsAnonymous, supportsApiKey, value, onChange }: { supportsAnonymous: boolean; supportsApiKey: boolean; value: ProviderMode; onChange: (value: ProviderMode) => void }) {
   return (
     <Select value={value} onValueChange={(next) => onChange(next as ProviderMode)}>
       <SelectTrigger><SelectValue /></SelectTrigger>
       <SelectContent>
-        <SelectItem value="api_keys">API Keys</SelectItem>
-        <SelectItem value="anonymous">匿名</SelectItem>
+        {supportsApiKey ? <SelectItem value="api_keys">API Keys</SelectItem> : null}
+        {supportsAnonymous ? <SelectItem value="anonymous">匿名</SelectItem> : null}
       </SelectContent>
     </Select>
   );

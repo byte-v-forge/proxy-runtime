@@ -107,6 +107,35 @@ func scoreFromFlags(flags riskFlags) float64 {
 	return score
 }
 
+func networkKindWithFlags(base proxyruntimev1.ProxyIPNetworkKind, flags riskFlags) proxyruntimev1.ProxyIPNetworkKind {
+	networkKind := base
+	if flags.datacenter || flags.hosting {
+		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_DATACENTER)
+	}
+	if flags.mobile {
+		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_MOBILE)
+	}
+	if flags.satellite {
+		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_SATELLITE)
+	}
+	if flags.broadcast {
+		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_BROADCAST)
+	}
+	if flags.anycast {
+		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_ANYCAST)
+	}
+	return networkKind
+}
+
+func hasNonEmptyString(value map[string]any, paths ...string) bool {
+	for _, path := range paths {
+		if strings.TrimSpace(stringValue(value, path)) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 type riskFlags struct {
 	bogon      bool
 	datacenter bool

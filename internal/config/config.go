@@ -147,7 +147,7 @@ func LoadFromEnv() (Config, error) {
 		Listeners:           envListeners("PROXY_RUNTIME_LISTENERS_JSON"),
 		RefreshInterval:     envx.DurationSeconds("PROXY_RUNTIME_REFRESH_SECONDS", 300*time.Second),
 		RequestTimeout:      envx.DurationSeconds("PROXY_RUNTIME_REQUEST_TIMEOUT_SECONDS", 10*time.Second),
-		ProxyExitGeoTimeout: envx.DurationSeconds("PROXY_RUNTIME_PROXY_EXIT_GEO_TIMEOUT_SECONDS", 10*time.Second),
+		ProxyExitGeoTimeout: envx.DurationSeconds("PROXY_RUNTIME_PROXY_EXIT_GEO_TIMEOUT_SECONDS", 5*time.Second),
 		ProxyExitGeoURLs:    proxyExitGeoURLs("PROXY_RUNTIME_PROXY_EXIT_GEO_URLS"),
 		EdgeCanaryTimeout:   envx.DurationSeconds("PROXY_RUNTIME_EDGE_CANARY_TIMEOUT_SECONDS", 10*time.Second),
 		IPFraud: IPFraudConfig{
@@ -329,7 +329,7 @@ func normalizeConfigToken(value string) string {
 func proxyExitGeoURLs(name string) []string {
 	values := envx.List(name)
 	if len(values) == 0 {
-		values = []string{"https://cloudflare.com/cdn-cgi/trace", "https://api.ipify.org?format=json"}
+		values = []string{"https://ipv4.icanhazip.com", "https://4.ident.me", "https://ifconfig.me/ip", "https://api.ipify.org?format=json", "https://checkip.global.api.aws/"}
 	}
 	out := make([]string, 0, len(values))
 	for _, value := range values {

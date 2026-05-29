@@ -27,8 +27,9 @@ type ManagerConfig struct {
 }
 
 type Manager struct {
-	cfg    ManagerConfig
-	logger *slog.Logger
+	cfg       ManagerConfig
+	logger    *slog.Logger
+	apiClient *http.Client
 
 	mu      sync.Mutex
 	current *process
@@ -53,7 +54,7 @@ func NewManager(cfg ManagerConfig, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Manager{cfg: cfg, logger: logger}
+	return &Manager{cfg: cfg, logger: logger, apiClient: &http.Client{Timeout: 5 * time.Second}}
 }
 
 func (m *Manager) Reload(ctx context.Context, cfg Config) error {
@@ -209,7 +210,7 @@ func (m *Manager) request(ctx context.Context, method string, path string, body 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := m.apiClient.Do(req)
 	if err != nil {
 		return 0, "", err
 	}

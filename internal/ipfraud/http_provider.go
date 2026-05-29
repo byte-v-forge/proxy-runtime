@@ -131,9 +131,9 @@ func quotaResponse(status int, header http.Header, body []byte) (time.Duration, 
 	if status == http.StatusTooManyRequests || status == http.StatusPaymentRequired {
 		return retryAfter, true
 	}
-	for _, name := range []string{"X-RateLimit-Remaining", "RateLimit-Remaining", "X-Quota-Remaining"} {
+	for _, name := range []string{"X-RateLimit-Remaining", "RateLimit-Remaining", "X-Quota-Remaining", "X-Rl"} {
 		if strings.TrimSpace(header.Get(name)) == "0" {
-			return retryAfter, true
+			return firstDuration(retryAfter, retryAfterDuration(header.Get("X-Ttl"))), true
 		}
 	}
 	text := strings.ToLower(string(body))
@@ -145,6 +145,15 @@ func quotaResponse(status int, header http.Header, body []byte) (time.Duration, 
 		}
 	}
 	return 0, false
+}
+
+func firstDuration(values ...time.Duration) time.Duration {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func quotaPayload(payload map[string]any) bool {

@@ -22,19 +22,23 @@ export type DynamicGatewayForm = {
 export type DynamicProviderForm = { provider_id: string; gateways: DynamicGatewayForm[] };
 export type RuntimeSettingsForm = { edgeEnabled: boolean; edgeUrl: string; edgeToken: string; providers: ProviderForm[]; dynamicProviders: DynamicProviderForm[] };
 
-const ffraudKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_FFRAUD;
 const ipapiKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IPAPI;
+const ipinfoKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IPINFO;
+const ip2LocationKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IP2LOCATION;
+const ipAPIComKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IP_API_COM;
 
 export const fallbackProviderCatalog: ProxyIPFraudProviderDescriptor[] = [
-  providerDescriptor('ffraud', 'FFraud', ffraudKind, 100),
-  providerDescriptor('ipapi', 'ipapi.is', ipapiKind, 90)
+  providerDescriptor('ipapi', 'ipapi.is', ipapiKind, 100, true, true),
+  providerDescriptor('ipinfo', 'IPinfo', ipinfoKind, 90, false, true),
+  providerDescriptor('ip2location', 'IP2Location.io', ip2LocationKind, 80, true, true),
+  providerDescriptor('ip-api-com', 'IP-API.com', ipAPIComKind, 40, true, false)
 ];
 
 export const defaultSettingsForm: RuntimeSettingsForm = { edgeEnabled: false, edgeUrl: '', edgeToken: '', providers: [], dynamicProviders: [] };
 export const providerCatalogFrom = (providers?: ProxyIPFraudProviderDescriptor[]) => providers?.length ? providers : fallbackProviderCatalog;
 export function providerDefaults(kind: ProxyIPFraudProviderKind, catalog = fallbackProviderCatalog): ProviderForm {
   const item = catalog.find((provider) => provider.kind === kind) || catalog[0];
-  return { id: item.provider_id, kind: item.kind, mode: 'api_keys', weight: item.default_weight || 100, keys: '' };
+  return { id: item.provider_id, kind: item.kind, mode: item.supports_api_key ? 'api_keys' : 'anonymous', weight: item.default_weight || 100, keys: '' };
 }
 
 export function formFromSettings(settings: ProxyRuntimeSettings | undefined, catalog = fallbackProviderCatalog): RuntimeSettingsForm {
@@ -55,8 +59,8 @@ function providerRequest(provider: ProviderForm): ProxyIPFraudProviderSettings {
   return { provider_id: provider.id, weight: Number(provider.weight) || 100, kind: provider.kind, anonymous: provider.mode === 'anonymous', api_keys: provider.mode === 'api_keys' ? splitKeys(provider.keys) : [], clear_api_keys: provider.mode !== 'api_keys' };
 }
 
-function providerDescriptor(provider_id: string, display_name: string, kind: ProxyIPFraudProviderKind, default_weight: number): ProxyIPFraudProviderDescriptor {
-  return { provider_id, display_name, kind, default_weight, supports_anonymous: true, supports_api_key: true };
+function providerDescriptor(provider_id: string, display_name: string, kind: ProxyIPFraudProviderKind, default_weight: number, supports_anonymous: boolean, supports_api_key: boolean): ProxyIPFraudProviderDescriptor {
+  return { provider_id, display_name, kind, default_weight, supports_anonymous, supports_api_key };
 }
 
 function splitKeys(value: string) {

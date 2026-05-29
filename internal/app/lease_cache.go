@@ -28,6 +28,7 @@ type leaseStore interface {
 	ActiveLease(ctx context.Context, accountID string) (*proxyruntimev1.ProxyDynamicLease, error)
 	DeleteLease(ctx context.Context, accountID string) error
 	LockAccount(ctx context.Context, accountID string) (leaseLock, error)
+	LockProviderAccount(ctx context.Context, providerAccountID string) (leaseLock, error)
 }
 
 type leaseLock interface {
@@ -132,6 +133,14 @@ func (s *redisLeaseStore) LockAccount(ctx context.Context, accountID string) (le
 		return nil, errors.New("lease account_id is required")
 	}
 	return s.locker.Lock(ctx, "account:"+accountID)
+}
+
+func (s *redisLeaseStore) LockProviderAccount(ctx context.Context, providerAccountID string) (leaseLock, error) {
+	providerAccountID = strings.TrimSpace(providerAccountID)
+	if providerAccountID == "" {
+		return nil, errors.New("provider account id is required")
+	}
+	return s.locker.Lock(ctx, "provider-account:"+providerAccountID)
 }
 
 func (s *redisLeaseStore) loadLease(ctx context.Context, accountID string) (*proxyruntimev1.ProxyDynamicLease, error) {

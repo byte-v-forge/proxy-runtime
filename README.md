@@ -158,8 +158,9 @@ IP 欺诈 provider 与 Cloudflare canary 通过 dashboard「配置」页或 `GET
     "token": "change-me"
   },
   "ip_fraud_providers": [
-    {"provider_id":"ffraud","weight":100,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_FFRAUD","api_keys":["key-a","key-b"]},
-    {"provider_id":"ipapi","weight":90,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IPAPI","anonymous":true}
+    {"provider_id":"ipapi","weight":100,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IPAPI","api_keys":["key-a","key-b"]},
+    {"provider_id":"ip2location","weight":80,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IP2LOCATION","anonymous":true},
+    {"provider_id":"ip-api-com","weight":40,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IP_API_COM","anonymous":true}
   ]
 }
 ```
@@ -188,9 +189,11 @@ IP 欺诈 provider 与 Cloudflare canary 通过 dashboard「配置」页或 `GET
 - `GET /proxy/leases`：查看账号级动态 IP lease。
 - `POST /proxy/leases/acquire`：为业务账号创建或替换动态 IP lease；只增量更新该账号对应的 GOST service/chain。
 - `POST /proxy/leases/release`：释放业务账号动态 IP lease。
-- `POST /proxy/proxy_exit_geo`：通过指定或默认 listener 返回代理出口 IP、国家、地区和城市。
-- `POST /proxy/ip_fraud_check`：通过指定或默认 listener 探测出口 IP，并返回抽象后的欺诈风险枚举结果。
+- `POST /proxy/proxy_exit_ip`：通过指定 listener 访问固定探测端点，返回当前代理出口 IP。
+- `POST /proxy/proxy_exit_geo`：输入 `ip`，通过固定 IP 信息 API 查询国家、地区和城市；不经过代理出口。
+- `POST /proxy/ip_fraud_check`：输入 `ip`，返回抽象后的欺诈风险枚举结果；不经过代理出口。
 - `POST /proxy/check_cf_access_risk`：通过同一出口访问 canary，返回抽象后的边缘访问风险。
+- `POST /proxy/target_connectivity_check`：通过同一出口访问 workflow 传入的目标 URL；只判断 DNS/TCP/TLS/HTTP 是否打通，任意 HTTP 响应（包括 401/403/404/5xx）都算 reachable，风控/拦截由 CF canary 与 IP fraud 单独判断。ChatGPT/OpenAI 默认用 `https://chatgpt.com/api/auth/session`、`https://auth.openai.com/`、`https://api.openai.com/v1/models` 这类轻量端点。
 - `GET /proxy/settings` / `PUT /proxy/settings`：读取或更新运行时检查配置；响应不回显 token/API key。
 
 以上代理 runtime API 同时暴露 `/api/proxy-runtime/*` 前缀，供 dashboard 模块通过同源路径访问。

@@ -6,6 +6,8 @@ import type {
   CheckProxyEdgeAccessResponse,
   CheckProxyIPFraudRequest,
   CheckProxyIPFraudResponse,
+  CheckProxyTargetConnectivityRequest,
+  CheckProxyTargetConnectivityResponse,
   DeleteProxyProviderAccountRequest,
   DeleteProxyProviderAccountResponse,
   DeleteProxySourceRequest,
@@ -13,6 +15,8 @@ import type {
   GetEgressGatewayResponse,
   GetProxyExitGeoRequest,
   GetProxyExitGeoResponse,
+  GetProxyExitIPRequest,
+  GetProxyExitIPResponse,
   GetProxyPoolResponse,
   GetProxyRuntimeSettingsResponse,
   ListProxyDynamicLeasesResponse,
@@ -68,9 +72,11 @@ export const resolveProxyChain = (req: ResolveProxyChainRequest) => api<ResolveP
 export const listDynamicLeases = () => api<ListProxyDynamicLeasesResponse>(`${base}/leases`);
 export const acquireProxyLease = (req: AcquireProxyLeaseRequest) => api<AcquireProxyLeaseResponse>(`${base}/leases/acquire`, { method: 'POST', body: JSON.stringify(req) });
 export const releaseProxyLease = (req: ReleaseProxyLeaseRequest) => api<ReleaseProxyLeaseResponse>(`${base}/leases/release`, { method: 'POST', body: JSON.stringify(req) });
+export const getProxyExitIP = (req: GetProxyExitIPRequest) => api<GetProxyExitIPResponse>(`${base}/proxy_exit_ip`, { method: 'POST', body: JSON.stringify(req) });
 export const getProxyExitGeo = (req: GetProxyExitGeoRequest) => api<GetProxyExitGeoResponse>(`${base}/proxy_exit_geo`, { method: 'POST', body: JSON.stringify(req) });
 export const checkProxyIPFraud = (req: CheckProxyIPFraudRequest) => api<CheckProxyIPFraudResponse>(`${base}/ip_fraud_check`, { method: 'POST', body: JSON.stringify(req) });
 export const checkProxyEdgeAccess = (req: CheckProxyEdgeAccessRequest) => api<CheckProxyEdgeAccessResponse>(`${base}/check_cf_access_risk`, { method: 'POST', body: JSON.stringify(req) });
+export const checkProxyTargetConnectivity = (req: CheckProxyTargetConnectivityRequest) => api<CheckProxyTargetConnectivityResponse>(`${base}/target_connectivity_check`, { method: 'POST', body: JSON.stringify(req) });
 export const getProxyRuntimeSettings = () => api<GetProxyRuntimeSettingsResponse>(`${base}/settings`);
 export const listIPFraudProviders = () => api<ListProxyIPFraudProvidersResponse>(`${base}/settings/ip-fraud-providers`);
 export const updateProxyRuntimeSettings = (req: UpdateProxyRuntimeSettingsRequest) => api<UpdateProxyRuntimeSettingsResponse>(`${base}/settings`, { method: 'PUT', body: JSON.stringify(req) });

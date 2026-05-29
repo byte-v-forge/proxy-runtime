@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	proxyruntimev1 "github.com/byte-v-forge/common-lib/gen/go/byte/v/forge/contracts/proxyruntime/v1"
 	"github.com/byte-v-forge/common-lib/httpclient"
@@ -32,6 +33,13 @@ type proxyExitGeo struct {
 	City        string
 }
 
+type cachedIPGeo struct {
+	geo       proxyExitGeo
+	expiresAt time.Time
+}
+
+const ipGeoCacheTTL = 24 * time.Hour
+
 func newIPFraudChecker(cfg config.IPFraudConfig, providers []ipfraud.ProviderConfig, logger *slog.Logger) ipFraudChecker {
 	return ipfraud.NewService(ipfraud.Config{
 		Providers:   providers,
@@ -39,6 +47,32 @@ func newIPFraudChecker(cfg config.IPFraudConfig, providers []ipfraud.ProviderCon
 		CacheTTL:    cfg.CacheTTL,
 		KeyCooldown: cfg.KeyCooldown,
 	}, logger)
+}
+
+func (r *Runtime) handleGetProxyExitIP(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var checkReq proxyruntimev1.GetProxyExitIPRequest
+	if req.Body != nil && req.ContentLength != 0 {
+		body, err := readRequestBody(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := protojsonx.Unmarshal(body, &checkReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	exitIP, err := r.getProxyExitIP(req.Context(), &checkReq)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	r.writeProto(w, &proxyruntimev1.GetProxyExitIPResponse{ProxyExitIp: exitIP})
 }
 
 func (r *Runtime) handleGetProxyExitGeo(w http.ResponseWriter, req *http.Request) {
@@ -119,6 +153,32 @@ func (r *Runtime) handleCheckEdgeAccessRisk(w http.ResponseWriter, req *http.Req
 	r.writeProto(w, &proxyruntimev1.CheckProxyEdgeAccessResponse{Check: check})
 }
 
+func (r *Runtime) handleCheckTargetConnectivity(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var checkReq proxyruntimev1.CheckProxyTargetConnectivityRequest
+	if req.Body != nil && req.ContentLength != 0 {
+		body, err := readRequestBody(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := protojsonx.Unmarshal(body, &checkReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	check, err := r.checkTargetConnectivity(req.Context(), &checkReq)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	r.writeProto(w, &proxyruntimev1.CheckProxyTargetConnectivityResponse{Check: check})
+}
+
 func (r *Runtime) handleIPFraudProviders(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -165,42 +225,45 @@ func (r *Runtime) handleRuntimeSettings(w http.ResponseWriter, req *http.Request
 	}
 }
 
-func (r *Runtime) getProxyExitGeo(ctx context.Context, req *proxyruntimev1.GetProxyExitGeoRequest) (*proxyruntimev1.ProxyExitGeo, error) {
+func (r *Runtime) getProxyExitIP(ctx context.Context, req *proxyruntimev1.GetProxyExitIPRequest) (*proxyruntimev1.ProxyExitIP, error) {
 	client, err := r.checkProxyHTTPClient(req.GetPoolId(), req.GetProviderId(), req.GetListenerId())
 	if err != nil {
 		return nil, err
 	}
-	geo, err := r.probeExitGeo(ctx, client)
+	probeCtx, cancel := context.WithTimeout(ctx, r.cfg.ProxyExitGeoTimeout)
+	defer cancel()
+	ip, err := r.probeExitIP(probeCtx, client)
 	if err != nil {
 		return nil, err
 	}
-	return &proxyruntimev1.ProxyExitGeo{
-		Ip:          geo.IP,
-		CountryCode: geo.CountryCode,
-		Region:      geo.Region,
-		City:        geo.City,
-		CheckedAt:   timestamppb.Now(),
-	}, nil
+	return &proxyruntimev1.ProxyExitIP{Ip: ip, CheckedAt: timestamppb.Now()}, nil
+}
+
+func (r *Runtime) getProxyExitGeo(ctx context.Context, req *proxyruntimev1.GetProxyExitGeoRequest) (*proxyruntimev1.ProxyExitGeo, error) {
+	ip := strings.TrimSpace(req.GetIp())
+	if net.ParseIP(ip) == nil {
+		return nil, errors.New("ip is required")
+	}
+	geo, err := r.lookupIPGeo(ctx, ip)
+	if err != nil {
+		return nil, err
+	}
+	return &proxyruntimev1.ProxyExitGeo{Ip: ip, CountryCode: geo.CountryCode, Region: geo.Region, City: geo.City, CheckedAt: timestamppb.Now()}, nil
 }
 
 func (r *Runtime) checkProxyIPFraud(ctx context.Context, req *proxyruntimev1.CheckProxyIPFraudRequest) (*proxyruntimev1.ProxyIPFraudCheck, error) {
-	client, err := r.checkProxyHTTPClient(req.GetPoolId(), req.GetProviderId(), req.GetListenerId())
-	if err != nil {
-		return nil, err
-	}
-	geo, err := r.probeExitGeo(ctx, client)
-	if err != nil {
-		return nil, err
+	ip := strings.TrimSpace(req.GetIp())
+	if net.ParseIP(ip) == nil {
+		return nil, errors.New("ip is required")
 	}
 	settings, err := r.settings.load()
 	if err != nil {
 		return nil, err
 	}
-	check, err := r.checkIPFraud(ctx, geo.IP, settings)
+	check, err := r.checkIPFraud(ctx, ip, settings)
 	if err != nil {
 		return nil, errors.New("check IP fraud")
 	}
-	enrichIPFraudGeo(check, geo)
 	return check, nil
 }
 
@@ -209,21 +272,52 @@ func (r *Runtime) checkProxyEdgeAccess(ctx context.Context, req *proxyruntimev1.
 	if err != nil {
 		return nil, err
 	}
-	geo, err := r.probeExitGeo(ctx, client)
-	if err != nil {
-		return nil, err
+	ip := strings.TrimSpace(req.GetIp())
+	if net.ParseIP(ip) == nil {
+		probeCtx, cancel := context.WithTimeout(ctx, r.cfg.ProxyExitGeoTimeout)
+		exitIP, err := r.probeExitIP(probeCtx, client)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		ip = exitIP
 	}
 	settings, err := r.settings.load()
 	if err != nil {
 		return nil, err
 	}
-	fraudCheck, err := r.checkIPFraud(ctx, geo.IP, settings)
-	if err != nil {
-		return nil, errors.New("check IP fraud")
-	}
-	enrichIPFraudGeo(fraudCheck, geo)
 	outcome := r.runEdgeCanary(ctx, client, settings)
-	return buildEdgeAccessCheck(fraudCheck, strings.TrimSpace(req.GetExpectedCountryCode()), outcome), nil
+	return buildEdgeAccessCheck(edgeBaseFraudCheck(ip), strings.TrimSpace(req.GetExpectedCountryCode()), outcome), nil
+}
+
+func (r *Runtime) checkTargetConnectivity(ctx context.Context, req *proxyruntimev1.CheckProxyTargetConnectivityRequest) (*proxyruntimev1.ProxyTargetConnectivityCheck, error) {
+	client, err := r.checkProxyHTTPClient(req.GetPoolId(), req.GetProviderId(), req.GetListenerId())
+	if err != nil {
+		return nil, err
+	}
+	target, err := normalizeConnectivityTarget(req.GetTargetUrl())
+	if err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	checkReq, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	checkReq.Header.Set("Accept", "text/html,application/json,text/plain;q=0.8")
+	checkReq.Header.Set("Cache-Control", "no-cache")
+	resp, err := client.Do(checkReq)
+	latency := uint32(time.Since(started).Milliseconds())
+	out := &proxyruntimev1.ProxyTargetConnectivityCheck{TargetUrl: target, Host: checkReq.URL.Hostname(), LatencyMs: latency, CheckedAt: timestamppb.Now()}
+	if err != nil {
+		out.ErrorMessage = "target connectivity check failed"
+		return out, nil
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	out.StatusCode = uint32(resp.StatusCode)
+	out.Reachable = true
+	return out, nil
 }
 
 func (r *Runtime) checkProxyHTTPClient(poolID string, providerID string, listenerID string) (*http.Client, error) {
@@ -276,17 +370,98 @@ func localListenHostPort(addr string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
-func (r *Runtime) probeExitGeo(ctx context.Context, client *http.Client) (proxyExitGeo, error) {
-	for _, endpoint := range r.cfg.ProxyExitGeoURLs {
-		geo, err := requestExitGeo(ctx, client, endpoint)
+func (r *Runtime) probeExitIP(ctx context.Context, client *http.Client) (string, error) {
+	endpoints := append([]string(nil), r.cfg.ProxyExitGeoURLs...)
+	if len(endpoints) == 0 {
+		return "", errors.New("proxy exit ip endpoints are not configured")
+	}
+	probeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type probeResult struct {
+		ip  string
+		err error
+	}
+	results := make(chan probeResult, len(endpoints))
+	for _, endpoint := range endpoints {
+		endpoint := strings.TrimSpace(endpoint)
+		if endpoint == "" {
+			results <- probeResult{err: errors.New("empty proxy exit ip endpoint")}
+			continue
+		}
+		go func() {
+			geo, err := requestIPInfo(probeCtx, client, endpoint, true)
+			if err != nil {
+				results <- probeResult{err: err}
+				return
+			}
+			if net.ParseIP(geo.IP) == nil {
+				results <- probeResult{err: errors.New("proxy exit ip endpoint returned invalid IP")}
+				return
+			}
+			results <- probeResult{ip: geo.IP}
+		}()
+	}
+	for range endpoints {
+		select {
+		case <-ctx.Done():
+			return "", errors.New("check proxy exit ip timed out")
+		case result := <-results:
+			if result.err == nil && result.ip != "" {
+				cancel()
+				return result.ip, nil
+			}
+		}
+	}
+	return "", errors.New("check proxy exit ip failed")
+}
+
+func (r *Runtime) lookupIPGeo(ctx context.Context, ip string) (proxyExitGeo, error) {
+	if geo, ok := r.cachedIPGeo(ip); ok {
+		return geo, nil
+	}
+	for _, endpoint := range ipGeoLookupEndpoints(ip) {
+		geo, err := requestIPInfo(ctx, http.DefaultClient, endpoint, false)
 		if err == nil {
+			geo.IP = ip
+			r.saveIPGeoCache(ip, geo)
 			return geo, nil
 		}
 	}
-	return proxyExitGeo{}, errors.New("check proxy exit geo failed")
+	return proxyExitGeo{}, errors.New("lookup ip geo failed")
 }
 
-func requestExitGeo(ctx context.Context, client *http.Client, endpoint string) (proxyExitGeo, error) {
+func (r *Runtime) cachedIPGeo(ip string) (proxyExitGeo, bool) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return proxyExitGeo{}, false
+	}
+	r.geoMu.Lock()
+	defer r.geoMu.Unlock()
+	if r.geoCache == nil {
+		return proxyExitGeo{}, false
+	}
+	item, ok := r.geoCache[ip]
+	if !ok || time.Now().After(item.expiresAt) {
+		delete(r.geoCache, ip)
+		return proxyExitGeo{}, false
+	}
+	return item.geo, true
+}
+
+func (r *Runtime) saveIPGeoCache(ip string, geo proxyExitGeo) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return
+	}
+	r.geoMu.Lock()
+	defer r.geoMu.Unlock()
+	if r.geoCache == nil {
+		r.geoCache = map[string]cachedIPGeo{}
+	}
+	r.geoCache[ip] = cachedIPGeo{geo: geo, expiresAt: time.Now().Add(ipGeoCacheTTL)}
+}
+
+func requestIPInfo(ctx context.Context, client *http.Client, endpoint string, requireIP bool) (proxyExitGeo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return proxyExitGeo{}, err
@@ -302,16 +477,16 @@ func requestExitGeo(ctx context.Context, client *http.Client, endpoint string) (
 		return proxyExitGeo{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return proxyExitGeo{}, errors.New("proxy exit geo endpoint unavailable")
+		return proxyExitGeo{}, errors.New("ip info endpoint unavailable")
 	}
-	geo := parseExitGeo(body)
-	if net.ParseIP(geo.IP) == nil {
-		return proxyExitGeo{}, errors.New("proxy exit geo endpoint returned invalid IP")
+	geo := parseIPInfo(body)
+	if requireIP && net.ParseIP(geo.IP) == nil {
+		return proxyExitGeo{}, errors.New("ip info endpoint returned invalid IP")
 	}
 	return geo, nil
 }
 
-func parseExitGeo(body []byte) proxyExitGeo {
+func parseIPInfo(body []byte) proxyExitGeo {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) == nil {
 		ip := jsonString(payload, "ip", "query", "origin")
@@ -321,7 +496,7 @@ func parseExitGeo(body []byte) proxyExitGeo {
 		return proxyExitGeo{
 			IP:          ip,
 			CountryCode: jsonString(payload, "country_code", "country", "loc"),
-			Region:      jsonString(payload, "region", "region_name", "state"),
+			Region:      jsonString(payload, "region", "region_code", "region_name", "state"),
 			City:        jsonString(payload, "city"),
 		}
 	}
@@ -342,6 +517,32 @@ func parseExitGeo(body []byte) proxyExitGeo {
 		}
 	}
 	return proxyExitGeo{IP: strings.TrimSpace(string(body))}
+}
+
+func ipGeoLookupEndpoints(ip string) []string {
+	escaped := url.PathEscape(ip)
+	return []string{
+		"https://ipwho.is/" + escaped,
+		"https://ipapi.co/" + escaped + "/json/",
+	}
+}
+
+func normalizeConnectivityTarget(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("target_url is required")
+	}
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("target_url is invalid")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("target_url scheme must be http or https")
+	}
+	return parsed.String(), nil
 }
 
 func jsonString(payload map[string]any, keys ...string) string {
@@ -379,8 +580,8 @@ func enrichIPFraudGeo(check *proxyruntimev1.ProxyIPFraudCheck, geo proxyExitGeo)
 	}
 }
 
-func (r *Runtime) checkIPFraud(ctx context.Context, ip string, settings runtimeSettingsFile) (*proxyruntimev1.ProxyIPFraudCheck, error) {
-	providers := settings.ipFraudProviders()
+func (r *Runtime) checkIPFraud(ctx context.Context, ip string, settings *runtimeSettingsFile) (*proxyruntimev1.ProxyIPFraudCheck, error) {
+	providers := ipFraudProviders(settings)
 	if len(providers) == 0 {
 		return unsupportedIPFraudCheck(ip), nil
 	}
@@ -388,8 +589,8 @@ func (r *Runtime) checkIPFraud(ctx context.Context, ip string, settings runtimeS
 	return service.Check(ctx, ip)
 }
 
-func (r *Runtime) ipFraudChecker(settings runtimeSettingsFile, providers []ipfraud.ProviderConfig) ipFraudChecker {
-	signature := settings.signature()
+func (r *Runtime) ipFraudChecker(settings *runtimeSettingsFile, providers []ipfraud.ProviderConfig) ipFraudChecker {
+	signature := runtimeSettingsSignature(settings)
 	r.fraudMu.Lock()
 	defer r.fraudMu.Unlock()
 	if r.fraud != nil && r.fraudSignature == signature {
@@ -405,6 +606,14 @@ func (r *Runtime) resetIPFraudChecker() {
 	defer r.fraudMu.Unlock()
 	r.fraud = nil
 	r.fraudSignature = ""
+}
+
+func edgeBaseFraudCheck(ip string) *proxyruntimev1.ProxyIPFraudCheck {
+	return &proxyruntimev1.ProxyIPFraudCheck{
+		Ip:        ip,
+		RiskLevel: proxyruntimev1.ProxyIPFraudRiskLevel_PROXY_IP_FRAUD_RISK_LEVEL_LOW,
+		CheckedAt: timestamppb.Now(),
+	}
 }
 
 func unsupportedIPFraudCheck(ip string) *proxyruntimev1.ProxyIPFraudCheck {
@@ -426,10 +635,11 @@ type edgeCanaryOutcome struct {
 	errorMessage string
 }
 
-func (r *Runtime) runEdgeCanary(ctx context.Context, client *http.Client, settings runtimeSettingsFile) edgeCanaryOutcome {
-	target := strings.TrimSpace(settings.EdgeCanary.URL)
-	token := strings.TrimSpace(settings.EdgeCanary.Token)
-	if !settings.EdgeCanary.enabled() || target == "" || token == "" {
+func (r *Runtime) runEdgeCanary(ctx context.Context, client *http.Client, settings *runtimeSettingsFile) edgeCanaryOutcome {
+	edgeCanary := settings.GetEdgeCanary()
+	target := strings.TrimSpace(edgeCanary.GetUrl())
+	token := strings.TrimSpace(edgeCanary.GetToken())
+	if !edgeCanaryEnabled(edgeCanary) || target == "" || token == "" {
 		return edgeCanaryOutcome{
 			level:        proxyruntimev1.ProxyEdgeAccessRiskLevel_PROXY_EDGE_ACCESS_RISK_LEVEL_UNSUPPORTED,
 			signal:       proxyruntimev1.ProxyEdgeAccessRiskSignal_PROXY_EDGE_ACCESS_RISK_SIGNAL_EDGE_ACCESS_UNSUPPORTED,

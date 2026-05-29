@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strconv"
@@ -18,6 +19,9 @@ import (
 )
 
 const sourceRuntimeProviderID = "mihomo"
+const countryRegionMatchScore = 600
+const sameContinentCountryMatchScore = 450
+const sameContinentRegionMatchScore = 350
 
 type chainPlanResult struct {
 	plan              *proxyruntimev1.ProxyChainPlan
@@ -40,11 +44,10 @@ type scoredLineCandidate struct {
 
 func (r *Runtime) resolveProxyChain(ctx context.Context, req *proxyruntimev1.ResolveProxyChainRequest) (*proxyruntimev1.ResolveProxyChainResponse, error) {
 	acquire := &proxyruntimev1.AcquireProxyLeaseRequest{
-		AccountId:         strings.TrimSpace(req.GetAccountId()),
-		ProviderAccountId: strings.TrimSpace(req.GetProviderAccountId()),
-		Policy:            req.GetSessionPolicy(),
-		ChainPolicy:       req.GetChainPolicy(),
-		Purpose:           req.GetChainPolicy().GetPurpose(),
+		AccountId:   strings.TrimSpace(req.GetAccountId()),
+		Policy:      req.GetSessionPolicy(),
+		ChainPolicy: req.GetChainPolicy(),
+		Purpose:     req.GetChainPolicy().GetPurpose(),
 	}
 	result, err := r.planProxyChain(ctx, acquire)
 	if err != nil {
@@ -59,7 +62,7 @@ func (r *Runtime) planProxyChain(ctx context.Context, req *proxyruntimev1.Acquir
 		return chainPlanResult{}, err
 	}
 	policy := normalizeChainPolicy(req)
-	gateways, err := r.dynamicGatewayCandidates(ctx, settings, strings.TrimSpace(req.GetProviderAccountId()), policy)
+	gateways, err := r.dynamicGatewayCandidates(ctx, settings, policy)
 	if err != nil {
 		return chainPlanResult{}, err
 	}
@@ -67,7 +70,7 @@ func (r *Runtime) planProxyChain(ctx context.Context, req *proxyruntimev1.Acquir
 		return chainPlanResult{}, errors.New("no dynamic IP gateway candidate")
 	}
 	attempt := chainAttempt(req)
-	selectedGateway := chooseGatewayCandidate(gateways, policy, req.GetAccountId(), attempt)
+	selectedGateway := chooseGatewayCandidate(gateways, policy, gatewaySelectionKey(req), attempt)
 	lines, lineErr := r.lineCandidates(ctx, policy)
 	if lineErr != nil {
 		r.logger.Warn("proxy line candidate discovery failed", "error", lineErr)
@@ -95,6 +98,7 @@ func (r *Runtime) planProxyChain(ctx context.Context, req *proxyruntimev1.Acquir
 	if selectedLine != nil {
 		plan.Line = selectedLine.proto
 	}
+	plan.Hops = r.chainPlanHops(ctx, selectedLine, selectedGateway)
 	return chainPlanResult{plan: plan, gateway: selectedGateway.gateway, lineNode: lineNodeForPlan(plan, lineNode), lineCandidates: lineCandidateProtos(lines), gatewayCandidates: gatewayCandidateProtos(gateways)}, nil
 }
 
@@ -151,18 +155,32 @@ func chainAttempt(req *proxyruntimev1.AcquireProxyLeaseRequest) int {
 	return attempt
 }
 
-func (r *Runtime) dynamicGatewayCandidates(ctx context.Context, settings runtimeSettingsFile, providerAccountID string, policy *proxyruntimev1.ProxyChainPolicy) ([]scoredGatewayCandidate, error) {
+func gatewaySelectionKey(req *proxyruntimev1.AcquireProxyLeaseRequest) string {
+	if req == nil {
+		return ""
+	}
+	labels := req.GetPolicy().GetLabels()
+	return firstNonEmpty(
+		labels["selection_seed"],
+		labels["proxy_selection_seed"],
+		labels["job_id"],
+		req.GetAccountId(),
+		req.GetPurpose(),
+	)
+}
+
+func (r *Runtime) dynamicGatewayCandidates(ctx context.Context, settings *runtimeSettingsFile, policy *proxyruntimev1.ProxyChainPolicy) ([]scoredGatewayCandidate, error) {
 	accounts, err := r.store.ListProviderAccounts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	gatewayMap := settings.dynamicIPGatewayMap()
+	gatewayMap := dynamicIPGatewayMap(settings)
 	out := make([]scoredGatewayCandidate, 0)
 	for accountIndex, account := range accounts {
 		if account.GetStatus() != proxyruntimev1.ProxyProviderAccountStatus_PROXY_PROVIDER_ACCOUNT_STATUS_ENABLED || !account.GetCredentialConfigured() {
 			continue
 		}
-		if providerAccountID != "" && account.GetAccountId() != providerAccountID {
+		if r.providerAccountBusy(ctx, account.GetAccountId()) {
 			continue
 		}
 		for gatewayIndex, gateway := range gatewayMap[account.GetProviderId()] {
@@ -185,6 +203,25 @@ func (r *Runtime) dynamicGatewayCandidates(ctx context.Context, settings runtime
 	return out, nil
 }
 
+func (r *Runtime) providerAccountBusy(ctx context.Context, providerAccountID string) bool {
+	providerAccountID = strings.TrimSpace(providerAccountID)
+	if providerAccountID == "" || r.leases == nil {
+		return false
+	}
+	leases, err := r.leases.ListLeases(ctx, false)
+	if err != nil {
+		r.logger.Warn("list proxy leases for provider account selection failed", "error", err)
+		return false
+	}
+	now := time.Now().UTC()
+	for _, lease := range leases {
+		if leaseActive(lease, now) && lease.GetProviderAccountId() == providerAccountID {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Runtime) lineCandidates(ctx context.Context, policy *proxyruntimev1.ProxyChainPolicy) ([]scoredLineCandidate, error) {
 	if !policy.GetPreferLineProxy() {
 		return nil, nil
@@ -199,9 +236,11 @@ func (r *Runtime) lineCandidates(ctx context.Context, policy *proxyruntimev1.Pro
 	}
 	regions := map[string][]string{}
 	kinds := map[string]proxyruntimev1.ProxySourceKind{}
+	sourceNames := map[string]string{}
 	for _, source := range sources {
 		regions[source.GetSourceId()] = regionCodesWithInferred(sourceRegionCodes(source), source.GetDisplayName())
 		kinds[source.GetSourceId()] = source.GetKind()
+		sourceNames[source.GetSourceId()] = source.GetDisplayName()
 	}
 	out := make([]scoredLineCandidate, 0)
 	for sourceIndex, source := range sources {
@@ -211,7 +250,7 @@ func (r *Runtime) lineCandidates(ctx context.Context, policy *proxyruntimev1.Pro
 		if source.GetKind() == proxyruntimev1.ProxySourceKind_PROXY_SOURCE_KIND_SUBSCRIPTION && hasNodeForSource(nodes, source.GetSourceId()) {
 			continue
 		}
-		candidate := &proxyruntimev1.ProxyLineCandidate{SourceId: source.GetSourceId(), NodeId: source.GetSourceId(), DisplayName: source.GetDisplayName(), SourceKind: source.GetKind(), Status: proxyruntimev1.ProxySourceNodeStatus_PROXY_SOURCE_NODE_STATUS_UNKNOWN, RegionCodes: regions[source.GetSourceId()], Priority: uint32(sourceIndex)}
+		candidate := &proxyruntimev1.ProxyLineCandidate{SourceId: source.GetSourceId(), NodeId: source.GetSourceId(), DisplayName: source.GetDisplayName(), SourceKind: source.GetKind(), Status: proxyruntimev1.ProxySourceNodeStatus_PROXY_SOURCE_NODE_STATUS_UNKNOWN, RegionCodes: regions[source.GetSourceId()], Priority: uint32(sourceIndex), SourceDisplayName: source.GetDisplayName()}
 		out = append(out, scoredLineCandidate{proto: candidate, score: lineScore(candidate, policy)})
 	}
 	for nodeIndex, node := range nodes {
@@ -219,29 +258,98 @@ func (r *Runtime) lineCandidates(ctx context.Context, policy *proxyruntimev1.Pro
 		if kind == proxyruntimev1.ProxySourceKind_PROXY_SOURCE_KIND_UNSPECIFIED {
 			kind = proxyruntimev1.ProxySourceKind_PROXY_SOURCE_KIND_SUBSCRIPTION
 		}
-		candidate := &proxyruntimev1.ProxyLineCandidate{SourceId: node.GetSourceId(), NodeId: node.GetNodeId(), DisplayName: node.GetDisplayName(), SourceKind: kind, Status: node.GetStatus(), DelayMs: node.GetDelayMs(), RegionCodes: regionCodesWithInferred(regions[node.GetSourceId()], node.GetDisplayName()), Priority: uint32(nodeIndex)}
+		candidate := &proxyruntimev1.ProxyLineCandidate{SourceId: node.GetSourceId(), NodeId: node.GetNodeId(), DisplayName: node.GetDisplayName(), SourceKind: kind, Status: node.GetStatus(), DelayMs: node.GetDelayMs(), RegionCodes: regionCodesWithInferred(regions[node.GetSourceId()], node.GetDisplayName()), Priority: uint32(nodeIndex), SourceDisplayName: sourceNames[node.GetSourceId()]}
 		out = append(out, scoredLineCandidate{proto: candidate, score: lineScore(candidate, policy)})
 	}
 	return out, nodeErr
 }
 
 func chooseGatewayCandidate(candidates []scoredGatewayCandidate, policy *proxyruntimev1.ProxyChainPolicy, key string, attempt int) scoredGatewayCandidate {
+	candidates = regionScopedGatewayCandidates(candidates, policy)
+	groups := gatewayCandidateGroups(candidates, key)
+	if len(groups) == 0 {
+		return scoredGatewayCandidate{}
+	}
+	groupIndex := 0
+	if len(groups) > 1 {
+		if policy.GetStrategy() == proxyruntimev1.ProxyChainStrategy_PROXY_CHAIN_STRATEGY_STABLE_HASH {
+			groupIndex = int(hashModulo(key, uint32(len(groups))))
+		} else {
+			if attempt < 1 {
+				attempt = 1
+			}
+			groupIndex = (attempt - 1) % len(groups)
+		}
+	}
+	return chooseGatewayWithinAccount(groups[groupIndex].candidates, policy, key, attempt)
+}
+
+type gatewayCandidateGroup struct {
+	providerAccountID string
+	priority          uint32
+	order             uint32
+	candidates        []scoredGatewayCandidate
+}
+
+func gatewayCandidateGroups(candidates []scoredGatewayCandidate, key string) []gatewayCandidateGroup {
+	byAccount := map[string]*gatewayCandidateGroup{}
+	for _, candidate := range candidates {
+		accountID := candidate.proto.GetProviderAccountId()
+		if strings.TrimSpace(accountID) == "" {
+			accountID = candidate.proto.GetProviderId()
+		}
+		group := byAccount[accountID]
+		if group == nil {
+			group = &gatewayCandidateGroup{
+				providerAccountID: accountID,
+				priority:          candidate.proto.GetPriority(),
+				order:             hashModulo(firstNonEmpty(key, "proxy-runtime")+":"+accountID, 0),
+			}
+			byAccount[accountID] = group
+		}
+		if candidate.proto.GetPriority() < group.priority {
+			group.priority = candidate.proto.GetPriority()
+		}
+		group.candidates = append(group.candidates, candidate)
+	}
+	out := make([]gatewayCandidateGroup, 0, len(byAccount))
+	for _, group := range byAccount {
+		out = append(out, *group)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].order != out[j].order {
+			return out[i].order < out[j].order
+		}
+		if out[i].priority != out[j].priority {
+			return out[i].priority < out[j].priority
+		}
+		return out[i].providerAccountID < out[j].providerAccountID
+	})
+	return out
+}
+
+func chooseGatewayWithinAccount(candidates []scoredGatewayCandidate, policy *proxyruntimev1.ProxyChainPolicy, key string, attempt int) scoredGatewayCandidate {
+	if len(candidates) == 0 {
+		return scoredGatewayCandidate{}
+	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].score != candidates[j].score {
 			return candidates[i].score > candidates[j].score
 		}
 		return candidates[i].proto.GetPriority() < candidates[j].proto.GetPriority()
 	})
-	if attempt > 1 && len(candidates) > 1 {
-		return candidates[(attempt-1)%len(candidates)]
-	}
 	if policy.GetStrategy() == proxyruntimev1.ProxyChainStrategy_PROXY_CHAIN_STRATEGY_STABLE_HASH && len(candidates) > 1 {
+		return candidates[int(hashModulo(key, uint32(len(candidates))))]
+	}
+	if attempt > 1 && len(candidates) > 1 {
 		best := candidates[0].score
 		count := 0
 		for count < len(candidates) && candidates[count].score == best {
 			count++
 		}
-		return candidates[int(hashModulo(key, uint32(count)))]
+		if count > 1 {
+			return candidates[(attempt-1)%count]
+		}
 	}
 	return candidates[0]
 }
@@ -259,6 +367,7 @@ func chooseLineCandidate(candidates []scoredLineCandidate, policy *proxyruntimev
 		}
 		return candidates[i].proto.GetPriority() < candidates[j].proto.GetPriority()
 	})
+	candidates = regionScopedLineCandidates(candidates, policy)
 	if attempt > 1 && len(candidates) > 1 {
 		return &candidates[(attempt-1)%len(candidates)]
 	}
@@ -271,6 +380,56 @@ func chooseLineCandidate(candidates []scoredLineCandidate, policy *proxyruntimev
 		return &candidates[int(hashModulo(key, uint32(count)))]
 	}
 	return &candidates[0]
+}
+
+func regionScopedGatewayCandidates(candidates []scoredGatewayCandidate, policy *proxyruntimev1.ProxyChainPolicy) []scoredGatewayCandidate {
+	if !hasRequestedRegion(policy) {
+		return candidates
+	}
+	matched := make([]scoredGatewayCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if regionSpecificScore(candidate.gateway.PreferredRegions, policy) > 0 {
+			matched = append(matched, candidate)
+		}
+	}
+	if len(matched) > 0 {
+		return matched
+	}
+	fallbacks := make([]scoredGatewayCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if accountproxy.GatewayIsFallback(candidate.gateway) {
+			fallbacks = append(fallbacks, candidate)
+		}
+	}
+	if len(fallbacks) > 0 {
+		return fallbacks
+	}
+	return candidates
+}
+
+func regionScopedLineCandidates(candidates []scoredLineCandidate, policy *proxyruntimev1.ProxyChainPolicy) []scoredLineCandidate {
+	if !hasRequestedRegion(policy) {
+		return candidates
+	}
+	matched := make([]scoredLineCandidate, 0, len(candidates))
+	best := 0
+	for _, candidate := range candidates {
+		best = max(best, regionSpecificScore(candidate.proto.GetRegionCodes(), policy))
+	}
+	for _, candidate := range candidates {
+		score := regionSpecificScore(candidate.proto.GetRegionCodes(), policy)
+		if score > 0 && (best < countryRegionMatchScore || score >= countryRegionMatchScore) {
+			matched = append(matched, candidate)
+		}
+	}
+	if len(matched) > 0 {
+		return matched
+	}
+	return candidates
+}
+
+func hasRequestedRegion(policy *proxyruntimev1.ProxyChainPolicy) bool {
+	return geox.NormalizeCountryAlpha2(policy.GetCountryCode()) != "" || strings.TrimSpace(policy.GetRegion()) != ""
 }
 
 func gatewayScore(gateway accountproxy.Gateway, policy *proxyruntimev1.ProxyChainPolicy) int {
@@ -296,6 +455,116 @@ func lineScore(candidate *proxyruntimev1.ProxyLineCandidate, policy *proxyruntim
 	return score
 }
 
+func (r *Runtime) chainPlanHops(ctx context.Context, line *scoredLineCandidate, gateway scoredGatewayCandidate) []*proxyruntimev1.ProxyChainHop {
+	hops := make([]*proxyruntimev1.ProxyChainHop, 0, 2)
+	if line != nil && line.proto != nil {
+		hop := &proxyruntimev1.ProxyChainHop{
+			HopId:             "line:" + line.proto.GetSourceId() + ":" + line.proto.GetNodeId(),
+			Order:             uint32(len(hops) + 1),
+			Role:              proxyruntimev1.ProxyChainHopRole_PROXY_CHAIN_HOP_ROLE_LINE_PROXY,
+			SourceKind:        line.proto.GetSourceKind(),
+			SourceId:          line.proto.GetSourceId(),
+			SourceDisplayName: line.proto.GetSourceDisplayName(),
+			NodeId:            line.proto.GetNodeId(),
+			NodeDisplayName:   line.proto.GetDisplayName(),
+			Status:            line.proto.GetStatus(),
+			DelayMs:           line.proto.GetDelayMs(),
+		}
+		if ip, err := r.sourcePlane.ResolveNodePublicIP(ctx, line.proto.GetSourceId(), line.proto.GetNodeId(), line.proto.GetDisplayName()); err != nil {
+			r.logger.Warn("resolve proxy line hop public ip failed", "source_id", line.proto.GetSourceId(), "node_id", line.proto.GetNodeId(), "error", err)
+		} else {
+			r.fillChainHopGeo(ctx, hop, ip)
+		}
+		hops = append(hops, hop)
+	}
+	if gateway.proto != nil {
+		hop := &proxyruntimev1.ProxyChainHop{
+			HopId:              "dynamic-gateway:" + gateway.proto.GetProviderAccountId() + ":" + gateway.proto.GetGatewayId(),
+			Order:              uint32(len(hops) + 1),
+			Role:               proxyruntimev1.ProxyChainHopRole_PROXY_CHAIN_HOP_ROLE_DYNAMIC_GATEWAY,
+			SourceKind:         proxyruntimev1.ProxySourceKind_PROXY_SOURCE_KIND_DYNAMIC_IP,
+			ProviderAccountId:  gateway.proto.GetProviderAccountId(),
+			ProviderId:         gateway.proto.GetProviderId(),
+			GatewayId:          gateway.proto.GetGatewayId(),
+			GatewayDisplayName: gateway.proto.GetDisplayName(),
+		}
+		if ip, err := resolvePublicIP(ctx, networkAddressHost(gateway.gateway.Addr)); err != nil {
+			r.logger.Warn("resolve dynamic gateway hop public ip failed", "provider_id", gateway.proto.GetProviderId(), "gateway_id", gateway.proto.GetGatewayId(), "error", err)
+		} else {
+			r.fillChainHopGeo(ctx, hop, ip)
+		}
+		hops = append(hops, hop)
+	}
+	return hops
+}
+
+func (r *Runtime) fillChainHopGeo(ctx context.Context, hop *proxyruntimev1.ProxyChainHop, ip string) {
+	if hop == nil {
+		return
+	}
+	ip = strings.TrimSpace(ip)
+	if net.ParseIP(ip) == nil {
+		return
+	}
+	hop.ObservedIp = ip
+	geo, err := r.lookupIPGeo(ctx, ip)
+	if err != nil {
+		r.logger.Warn("resolve proxy chain hop geo failed", "hop_id", hop.GetHopId(), "observed_ip", ip, "error", err)
+		return
+	}
+	hop.CountryCode = geo.CountryCode
+	hop.Region = geo.Region
+	hop.City = geo.City
+}
+
+func chainHopByRole(plan *proxyruntimev1.ProxyChainPlan, role proxyruntimev1.ProxyChainHopRole) *proxyruntimev1.ProxyChainHop {
+	for _, hop := range plan.GetHops() {
+		if hop.GetRole() == role {
+			return hop
+		}
+	}
+	return nil
+}
+
+func networkAddressHost(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	if parsed, err := url.Parse(addr); err == nil && parsed != nil && parsed.Hostname() != "" {
+		return parsed.Hostname()
+	}
+	return strings.Trim(addr, "[]")
+}
+
+func resolvePublicIP(ctx context.Context, host string) (string, error) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String(), nil
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return "", err
+	}
+	for _, addr := range addrs {
+		if ip := addr.IP.To4(); ip != nil {
+			return ip.String(), nil
+		}
+	}
+	if len(addrs) > 0 {
+		return addrs[0].IP.String(), nil
+	}
+	return "", nil
+}
+
 func sourceRegionCodes(source *proxyruntimev1.ProxySourceDescriptor) []string {
 	if source.GetFixedProxy() != nil {
 		return cleanRegionCodes(source.GetFixedProxy().GetRegionCodes())
@@ -307,6 +576,14 @@ func sourceRegionCodes(source *proxyruntimev1.ProxySourceDescriptor) []string {
 }
 
 func regionScore(regions []string, policy *proxyruntimev1.ProxyChainPolicy) int {
+	return regionScoreWithFallback(regions, policy, true)
+}
+
+func regionSpecificScore(regions []string, policy *proxyruntimev1.ProxyChainPolicy) int {
+	return regionScoreWithFallback(regions, policy, false)
+}
+
+func regionScoreWithFallback(regions []string, policy *proxyruntimev1.ProxyChainPolicy, includeFallback bool) int {
 	regions = cleanRegionCodes(regions)
 	if len(regions) == 0 {
 		return 0
@@ -323,12 +600,12 @@ func regionScore(regions []string, policy *proxyruntimev1.ProxyChainPolicy) int 
 		case requestRegion != "" && region == requestRegion:
 			best = max(best, 700)
 		case country != "" && gatewayCountry == country:
-			best = max(best, 600)
-		case continent != "" && regionContinent == continent:
-			best = max(best, 350)
+			best = max(best, countryRegionMatchScore)
 		case continent != "" && gatewayContinent == continent:
-			best = max(best, 300)
-		case region == "ANY" || region == "GLOBAL" || region == "*":
+			best = max(best, sameContinentCountryMatchScore)
+		case continent != "" && regionContinent == continent:
+			best = max(best, sameContinentRegionMatchScore)
+		case includeFallback && (region == "ANY" || region == "GLOBAL" || region == "*"):
 			best = max(best, 50)
 		}
 	}
@@ -404,6 +681,9 @@ func lineNodeForPlan(plan *proxyruntimev1.ProxyChainPlan, node *provider.Node) *
 	}
 	copy.Labels["line_source_id"] = plan.GetLine().GetSourceId()
 	copy.Labels["line_node_id"] = plan.GetLine().GetNodeId()
+	if hop := chainHopByRole(plan, proxyruntimev1.ProxyChainHopRole_PROXY_CHAIN_HOP_ROLE_LINE_PROXY); hop != nil {
+		copy.Labels["line_observed_ip"] = hop.GetObservedIp()
+	}
 	copy.Labels["chain_id"] = plan.GetChainId()
 	return &copy
 }
@@ -465,8 +745,8 @@ func protocolEnum(value string) proxyruntimev1.ProxyProtocol {
 	}
 }
 
-func gatewaysForPlan(settings runtimeSettingsFile, plan *proxyruntimev1.ProxyChainPlan, providerID string) []accountproxy.Gateway {
-	gateways := settings.dynamicIPGateways(providerID)
+func gatewaysForPlan(settings *runtimeSettingsFile, plan *proxyruntimev1.ProxyChainPlan, providerID string) []accountproxy.Gateway {
+	gateways := dynamicIPGateways(settings, providerID)
 	gatewayID := strings.TrimSpace(plan.GetDynamicGateway().GetGatewayId())
 	if gatewayID == "" {
 		return gateways

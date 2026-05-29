@@ -44,7 +44,6 @@ type Runtime struct {
 	refreshedAt time.Time
 
 	refreshMu        sync.Mutex
-	leaseMu          sync.Mutex
 	forwardMu        sync.Mutex
 	forwardCancel    context.CancelFunc
 	forwardListeners []net.Listener
@@ -53,6 +52,9 @@ type Runtime struct {
 	fraudMu        sync.Mutex
 	fraudSignature string
 	fraud          ipFraudChecker
+
+	geoMu    sync.Mutex
+	geoCache map[string]cachedIPGeo
 }
 
 func NewRuntime(cfg config.Config, proxyProvider provider.Provider, routePlane dataplane.Driver, sourcePlane sourceplane.Driver, store *PostgresStore, leases leaseStore, logger *slog.Logger) *Runtime {
@@ -153,9 +155,11 @@ func (r *Runtime) serveHTTP(ctx context.Context, errCh chan<- error) {
 		mux.HandleFunc(prefix+"/leases", r.handleLeases)
 		mux.HandleFunc(prefix+"/leases/acquire", r.handleAcquireLease)
 		mux.HandleFunc(prefix+"/leases/release", r.handleReleaseLease)
+		mux.HandleFunc(prefix+"/proxy_exit_ip", r.handleGetProxyExitIP)
 		mux.HandleFunc(prefix+"/proxy_exit_geo", r.handleGetProxyExitGeo)
 		mux.HandleFunc(prefix+"/ip_fraud_check", r.handleCheckIPFraud)
 		mux.HandleFunc(prefix+"/check_cf_access_risk", r.handleCheckEdgeAccessRisk)
+		mux.HandleFunc(prefix+"/target_connectivity_check", r.handleCheckTargetConnectivity)
 		mux.HandleFunc(prefix+"/settings/ip-fraud-providers", r.handleIPFraudProviders)
 		mux.HandleFunc(prefix+"/settings", r.handleRuntimeSettings)
 	}
@@ -203,7 +207,7 @@ func (r *Runtime) handleProviders(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	r.writeProto(w, &proxyruntimev1.ListProxyProvidersResponse{Providers: accountproxy.Descriptors(settings.dynamicIPGatewayMap())})
+	r.writeProto(w, &proxyruntimev1.ListProxyProvidersResponse{Providers: accountproxy.Descriptors(dynamicIPGatewayMap(settings))})
 }
 func (r *Runtime) handleGateway(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
@@ -389,7 +393,7 @@ func (r *Runtime) listSources(ctx context.Context) ([]*proxyruntimev1.ProxySourc
 	if err != nil {
 		return nil, err
 	}
-	sources, err := r.store.ListSources(ctx, len(r.cfg.StaticChain), settings.dynamicIPGatewayMap())
+	sources, err := r.store.ListSources(ctx, len(r.cfg.StaticChain), dynamicIPGatewayMap(settings))
 	if err != nil {
 		return nil, err
 	}
@@ -447,8 +451,6 @@ func (r *Runtime) handleReleaseLease(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Runtime) acquireLease(ctx context.Context, httpReq *http.Request, req *proxyruntimev1.AcquireProxyLeaseRequest) (*proxyruntimev1.ProxyDynamicLease, error) {
-	r.leaseMu.Lock()
-	defer r.leaseMu.Unlock()
 	req.AccountId = strings.TrimSpace(req.GetAccountId())
 	if req.AccountId == "" {
 		return nil, errors.New("account_id is required")
@@ -467,6 +469,14 @@ func (r *Runtime) acquireLease(ctx context.Context, httpReq *http.Request, req *
 		return nil, err
 	}
 	providerAccountID := planResult.plan.GetDynamicGateway().GetProviderAccountId()
+	providerLock, err := r.leases.LockProviderAccount(ctx, providerAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = providerLock.Unlock(ctx) }()
+	if r.providerAccountBusy(ctx, providerAccountID) {
+		return nil, errors.New("selected provider account is already leased")
+	}
 	providerCfg, providerAccountID, err := r.store.ProviderConfig(ctx, providerAccountID)
 	if err != nil {
 		return nil, err
@@ -477,12 +487,14 @@ func (r *Runtime) acquireLease(ctx context.Context, httpReq *http.Request, req *
 		return nil, err
 	}
 	normalizeLeasePolicy(req)
-	req.ProviderAccountId = providerAccountID
 	req.Policy.Labels["chain_id"] = planResult.plan.GetChainId()
 	req.Policy.Labels["dynamic_gateway_id"] = planResult.plan.GetDynamicGateway().GetGatewayId()
 	if planResult.plan.GetLine() != nil {
 		req.Policy.Labels["line_source_id"] = planResult.plan.GetLine().GetSourceId()
 		req.Policy.Labels["line_node_id"] = planResult.plan.GetLine().GetNodeId()
+		if hop := chainHopByRole(planResult.plan, proxyruntimev1.ProxyChainHopRole_PROXY_CHAIN_HOP_ROLE_LINE_PROXY); hop != nil {
+			req.Policy.Labels["line_observed_ip"] = hop.GetObservedIp()
+		}
 	}
 	session, err := providerClient.CreateSession(ctx, req)
 	if err != nil {
@@ -512,6 +524,9 @@ func (r *Runtime) acquireLease(ctx context.Context, httpReq *http.Request, req *
 	if planResult.plan.GetLine() != nil {
 		egress.Labels["line_source_id"] = planResult.plan.GetLine().GetSourceId()
 		egress.Labels["line_node_id"] = planResult.plan.GetLine().GetNodeId()
+		if hop := chainHopByRole(planResult.plan, proxyruntimev1.ProxyChainHopRole_PROXY_CHAIN_HOP_ROLE_LINE_PROXY); hop != nil {
+			egress.Labels["line_observed_ip"] = hop.GetObservedIp()
+		}
 	}
 	session.Egress = egress
 	staticChain, err := r.parseStaticChain()

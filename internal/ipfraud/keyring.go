@@ -7,6 +7,7 @@ import (
 )
 
 var errQuotaExhausted = errors.New("IP fraud provider quota exhausted")
+var errProviderUnavailable = errors.New("IP fraud provider unavailable")
 
 type quotaError struct {
 	retryAfter time.Duration

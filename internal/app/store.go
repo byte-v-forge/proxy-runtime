@@ -10,6 +10,7 @@ import (
 	"time"
 
 	proxyruntimev1 "github.com/byte-v-forge/common-lib/gen/go/byte/v/forge/contracts/proxyruntime/v1"
+	"github.com/byte-v-forge/common-lib/protojsonx"
 	"github.com/byte-v-forge/common-lib/randx"
 	"github.com/byte-v-forge/proxy-runtime/internal/config"
 	"github.com/byte-v-forge/proxy-runtime/internal/provider/accountproxy"
@@ -267,26 +268,24 @@ func (s *PostgresStore) ListSources(ctx context.Context, staticEndpointCount int
 	return out, nil
 }
 
-func (s *PostgresStore) LoadRuntimeSettings(ctx context.Context) (runtimeSettingsFile, error) {
+func (s *PostgresStore) LoadRuntimeSettings(ctx context.Context) (*runtimeSettingsFile, error) {
 	var raw string
 	err := s.pool.QueryRow(ctx, `SELECT setting_json::text FROM proxy_runtime_settings WHERE setting_key=$1`, runtimeSettingsKey).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return runtimeSettingsFile{}, nil
+		return normalizeRuntimeSettings(nil), nil
 	}
 	if err != nil {
-		return runtimeSettingsFile{}, err
+		return nil, err
 	}
-	var settings runtimeSettingsFile
+	settings := &proxyruntimev1.ProxyRuntimePersistentSettings{}
 	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &settings)
+		_ = protojsonx.Unmarshal([]byte(raw), settings)
 	}
-	settings.normalize()
-	return settings, nil
+	return normalizeRuntimeSettings(settings), nil
 }
 
-func (s *PostgresStore) SaveRuntimeSettings(ctx context.Context, settings runtimeSettingsFile) error {
-	settings.normalize()
-	data, err := json.Marshal(settings)
+func (s *PostgresStore) SaveRuntimeSettings(ctx context.Context, settings *runtimeSettingsFile) error {
+	data, err := protojsonx.Marshal(normalizeRuntimeSettings(settings))
 	if err != nil {
 		return err
 	}
@@ -310,4 +309,23 @@ ALTER TABLE proxy_runtime_provider_accounts DROP COLUMN IF EXISTS proxy_addr, DR
 DROP TABLE IF EXISTS proxy_runtime_subscription_sources;
 DROP TABLE IF EXISTS proxy_runtime_dynamic_leases;
 CREATE TABLE IF NOT EXISTS proxy_runtime_settings (setting_key text PRIMARY KEY, setting_json jsonb NOT NULL DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now());
+UPDATE proxy_runtime_settings
+SET setting_json = jsonb_set(
+	setting_json,
+	'{ip_fraud_providers}',
+	COALESCE((
+		SELECT jsonb_agg(provider)
+		FROM jsonb_array_elements(
+			CASE
+				WHEN jsonb_typeof(setting_json->'ip_fraud_providers') = 'array' THEN setting_json->'ip_fraud_providers'
+				ELSE '[]'::jsonb
+			END
+		) AS provider
+		WHERE provider->>'kind' <> 'PROXY_IP_FRAUD_PROVIDER_KIND_FFRAUD'
+			AND provider->>'provider_id' <> 'ffraud'
+	), '[]'::jsonb),
+	true
+)
+WHERE setting_key = 'runtime'
+	AND setting_json ? 'ip_fraud_providers';
 `

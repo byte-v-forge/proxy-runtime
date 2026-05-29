@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,48 +11,17 @@ import (
 	"sync"
 
 	proxyruntimev1 "github.com/byte-v-forge/common-lib/gen/go/byte/v/forge/contracts/proxyruntime/v1"
+	"github.com/byte-v-forge/common-lib/protojsonx"
 	"github.com/byte-v-forge/proxy-runtime/internal/ipfraud"
 	"github.com/byte-v-forge/proxy-runtime/internal/provider/accountproxy"
 )
+
+type runtimeSettingsFile = proxyruntimev1.ProxyRuntimePersistentSettings
 
 type runtimeSettingsStore struct {
 	store  *PostgresStore
 	logger *slog.Logger
 	mu     sync.Mutex
-}
-
-type runtimeSettingsFile struct {
-	EdgeCanary         edgeCanarySettings         `json:"edge_canary"`
-	IPFraudProviders   []ipFraudProviderSetting   `json:"ip_fraud_providers"`
-	DynamicIPProviders []dynamicIPProviderSetting `json:"dynamic_ip_providers"`
-}
-
-type edgeCanarySettings struct {
-	Enabled *bool  `json:"enabled,omitempty"`
-	URL     string `json:"url"`
-	Token   string `json:"token"`
-}
-
-type ipFraudProviderSetting struct {
-	ID        string                                  `json:"id"`
-	Weight    uint32                                  `json:"weight"`
-	Kind      proxyruntimev1.ProxyIPFraudProviderKind `json:"kind"`
-	Anonymous bool                                    `json:"anonymous"`
-	APIKeys   []string                                `json:"api_keys"`
-}
-
-type dynamicIPProviderSetting struct {
-	ProviderID string                    `json:"provider_id"`
-	Gateways   []dynamicIPGatewaySetting `json:"gateways"`
-}
-
-type dynamicIPGatewaySetting struct {
-	GatewayID       string                         `json:"gateway_id"`
-	DisplayName     string                         `json:"display_name"`
-	Addr            string                         `json:"addr"`
-	RegionCodes     []string                       `json:"region_codes"`
-	Protocols       []proxyruntimev1.ProxyProtocol `json:"protocols"`
-	DefaultProtocol proxyruntimev1.ProxyProtocol   `json:"default_protocol"`
 }
 
 func newRuntimeSettingsStore(store *PostgresStore, logger *slog.Logger) *runtimeSettingsStore {
@@ -68,7 +36,7 @@ func (s *runtimeSettingsStore) view() (*proxyruntimev1.ProxyRuntimeSettings, err
 	if err != nil {
 		return nil, err
 	}
-	return settings.view(), nil
+	return runtimeSettingsView(settings), nil
 }
 
 func (s *runtimeSettingsStore) update(req *proxyruntimev1.UpdateProxyRuntimeSettingsRequest) (*proxyruntimev1.ProxyRuntimeSettings, error) {
@@ -85,106 +53,81 @@ func (s *runtimeSettingsStore) update(req *proxyruntimev1.UpdateProxyRuntimeSett
 	if err := s.saveLocked(settings); err != nil {
 		return nil, err
 	}
-	return settings.view(), nil
+	return runtimeSettingsView(settings), nil
 }
 
-func (s *runtimeSettingsStore) load() (runtimeSettingsFile, error) {
+func (s *runtimeSettingsStore) load() (*runtimeSettingsFile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.loadLocked()
 }
 
-func (s *runtimeSettingsStore) loadLocked() (runtimeSettingsFile, error) {
+func (s *runtimeSettingsStore) loadLocked() (*runtimeSettingsFile, error) {
 	if s.store == nil {
-		return runtimeSettingsFile{}, nil
+		return normalizeRuntimeSettings(nil), nil
 	}
 	return s.store.LoadRuntimeSettings(context.Background())
 }
 
-func (s *runtimeSettingsStore) save(settings runtimeSettingsFile) error {
+func (s *runtimeSettingsStore) save(settings *runtimeSettingsFile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.saveLocked(settings)
 }
 
-func (s *runtimeSettingsStore) saveLocked(settings runtimeSettingsFile) error {
+func (s *runtimeSettingsStore) saveLocked(settings *runtimeSettingsFile) error {
 	if s.store == nil {
 		return nil
 	}
-	settings.normalize()
-	return s.store.SaveRuntimeSettings(context.Background(), settings)
+	return s.store.SaveRuntimeSettings(context.Background(), normalizeRuntimeSettings(settings))
 }
 
-func settingsFromRequest(req *proxyruntimev1.UpdateProxyRuntimeSettingsRequest, current runtimeSettingsFile) (runtimeSettingsFile, error) {
-	current.normalize()
-	edgeCanary := edgeCanaryFromRequest(req.GetEdgeCanary(), current.EdgeCanary)
-	settings := runtimeSettingsFile{
-		EdgeCanary:         edgeCanary,
-		IPFraudProviders:   make([]ipFraudProviderSetting, 0, len(req.GetIpFraudProviders())),
-		DynamicIPProviders: make([]dynamicIPProviderSetting, 0, len(req.GetDynamicIpProviders())),
+func settingsFromRequest(req *proxyruntimev1.UpdateProxyRuntimeSettingsRequest, current *runtimeSettingsFile) (*runtimeSettingsFile, error) {
+	current = normalizeRuntimeSettings(current)
+	settings := &proxyruntimev1.ProxyRuntimePersistentSettings{
+		EdgeCanary:         edgeCanaryFromRequest(req.GetEdgeCanary(), current.GetEdgeCanary()),
+		IpFraudProviders:   make([]*proxyruntimev1.ProxyIPFraudProviderSettings, 0, len(req.GetIpFraudProviders())),
+		DynamicIpProviders: make([]*proxyruntimev1.ProxyDynamicIPProviderSettings, 0, len(req.GetDynamicIpProviders())),
 	}
-	if settings.EdgeCanary.enabled() && settings.EdgeCanary.URL == "" {
-		return runtimeSettingsFile{}, errors.New("edge canary url is required when enabled")
+	if edgeCanaryEnabled(settings.GetEdgeCanary()) && strings.TrimSpace(settings.GetEdgeCanary().GetUrl()) == "" {
+		return nil, errors.New("edge canary url is required when enabled")
 	}
-	currentProviders := current.providerSecrets()
+	currentProviders := providerSecrets(current)
 	seenProviders := map[string]struct{}{}
 	for index, provider := range req.GetIpFraudProviders() {
-		kind := provider.GetKind()
-		id := strings.TrimSpace(provider.GetProviderId())
-		if id == "" {
-			id = ipfraud.DefaultProviderID(kind)
+		item := ipFraudProviderFromRequest(provider, currentProviders, index)
+		if err := validateIPFraudProvider(item, index); err != nil {
+			return nil, err
 		}
-		apiKeys := cleanList(provider.GetApiKeys())
-		if len(apiKeys) == 0 && !provider.GetClearApiKeys() && !provider.GetAnonymous() {
-			apiKeys = currentProviders[providerSecretKey(kind, id)]
-		}
-		item := ipFraudProviderSetting{
-			ID:        id,
-			Weight:    provider.GetWeight(),
-			Kind:      kind,
-			Anonymous: provider.GetAnonymous(),
-			APIKeys:   apiKeys,
-		}
-		if item.Weight == 0 {
-			item.Weight = providerDefaultWeight(item.Kind, index)
-		}
-		if err := item.validate(index); err != nil {
-			return runtimeSettingsFile{}, err
-		}
-		key := providerSecretKey(item.Kind, item.ID)
+		key := providerSecretKey(item.GetKind(), item.GetProviderId())
 		if _, exists := seenProviders[key]; exists {
-			return runtimeSettingsFile{}, fmt.Errorf("ip_fraud_providers[%d] duplicates provider %q", index, item.ID)
+			return nil, fmt.Errorf("ip_fraud_providers[%d] duplicates provider %q", index, item.GetProviderId())
 		}
 		seenProviders[key] = struct{}{}
-		settings.IPFraudProviders = append(settings.IPFraudProviders, item)
+		settings.IpFraudProviders = append(settings.IpFraudProviders, item)
 	}
 	seenDynamicProviders := map[string]struct{}{}
 	for index, provider := range req.GetDynamicIpProviders() {
 		item := dynamicIPProviderFromProto(provider)
-		if err := item.validate(index); err != nil {
-			return runtimeSettingsFile{}, err
+		if err := validateDynamicIPProvider(item, index); err != nil {
+			return nil, err
 		}
-		if _, exists := seenDynamicProviders[item.ProviderID]; exists {
-			return runtimeSettingsFile{}, fmt.Errorf("dynamic_ip_providers[%d] duplicates provider %q", index, item.ProviderID)
+		if _, exists := seenDynamicProviders[item.GetProviderId()]; exists {
+			return nil, fmt.Errorf("dynamic_ip_providers[%d] duplicates provider %q", index, item.GetProviderId())
 		}
-		seenDynamicProviders[item.ProviderID] = struct{}{}
-		settings.DynamicIPProviders = append(settings.DynamicIPProviders, item)
+		seenDynamicProviders[item.GetProviderId()] = struct{}{}
+		settings.DynamicIpProviders = append(settings.DynamicIpProviders, item)
 	}
-	settings.normalize()
-	return settings, nil
+	return normalizeRuntimeSettings(settings), nil
 }
 
-func edgeCanaryFromRequest(
-	req *proxyruntimev1.ProxyEdgeCanarySettings,
-	current edgeCanarySettings,
-) edgeCanarySettings {
+func edgeCanaryFromRequest(req *proxyruntimev1.ProxyEdgeCanarySettings, current *proxyruntimev1.ProxyEdgeCanarySettings) *proxyruntimev1.ProxyEdgeCanarySettings {
 	if req == nil {
-		return current
+		return cloneEdgeCanary(current)
 	}
-	enabled := req.GetEnabled()
-	settings := edgeCanarySettings{
-		Enabled: &enabled,
-		URL:     firstNonEmpty(req.GetUrl(), current.URL),
+	settings := &proxyruntimev1.ProxyEdgeCanarySettings{
+		Enabled: req.GetEnabled(),
+		Url:     firstNonEmpty(req.GetUrl(), current.GetUrl()),
 		Token:   strings.TrimSpace(req.GetToken()),
 	}
 	switch {
@@ -192,66 +135,69 @@ func edgeCanaryFromRequest(
 	case req.GetClearToken():
 		settings.Token = ""
 	default:
-		settings.Token = strings.TrimSpace(current.Token)
+		settings.Token = strings.TrimSpace(current.GetToken())
 	}
 	return settings
 }
 
-func (s *runtimeSettingsFile) normalize() {
-	s.EdgeCanary.URL = strings.TrimSpace(s.EdgeCanary.URL)
-	s.EdgeCanary.Token = strings.TrimSpace(s.EdgeCanary.Token)
-	for index := range s.IPFraudProviders {
-		s.IPFraudProviders[index].normalize()
-		if s.IPFraudProviders[index].Weight == 0 {
-			s.IPFraudProviders[index].Weight = providerDefaultWeight(s.IPFraudProviders[index].Kind, index)
-		}
+func normalizeRuntimeSettings(settings *runtimeSettingsFile) *runtimeSettingsFile {
+	if settings == nil {
+		settings = &proxyruntimev1.ProxyRuntimePersistentSettings{}
 	}
-	for index := range s.DynamicIPProviders {
-		s.DynamicIPProviders[index].normalize()
+	if settings.EdgeCanary != nil {
+		settings.EdgeCanary.Url = strings.TrimSpace(settings.EdgeCanary.GetUrl())
+		settings.EdgeCanary.Token = strings.TrimSpace(settings.EdgeCanary.GetToken())
 	}
+	for index := range settings.IpFraudProviders {
+		normalizeIPFraudProvider(settings.IpFraudProviders[index], index)
+	}
+	settings.IpFraudProviders = supportedIPFraudProviders(settings.IpFraudProviders)
+	for index := range settings.DynamicIpProviders {
+		normalizeDynamicIPProvider(settings.DynamicIpProviders[index])
+	}
+	return settings
 }
 
-func (s edgeCanarySettings) enabled() bool {
-	if s.Enabled != nil {
-		return *s.Enabled
-	}
-	return strings.TrimSpace(s.URL) != "" && strings.TrimSpace(s.Token) != ""
+func edgeCanaryEnabled(settings *proxyruntimev1.ProxyEdgeCanarySettings) bool {
+	return settings != nil && settings.GetEnabled()
 }
 
-func (s runtimeSettingsFile) view() *proxyruntimev1.ProxyRuntimeSettings {
+func runtimeSettingsView(settings *runtimeSettingsFile) *proxyruntimev1.ProxyRuntimeSettings {
+	settings = normalizeRuntimeSettings(settings)
+	edge := settings.GetEdgeCanary()
 	out := &proxyruntimev1.ProxyRuntimeSettings{
 		EdgeCanary: &proxyruntimev1.ProxyEdgeCanarySettingsView{
-			Url:             s.EdgeCanary.URL,
-			TokenConfigured: s.EdgeCanary.Token != "",
-			Enabled:         s.EdgeCanary.enabled(),
+			Url:             edge.GetUrl(),
+			TokenConfigured: edge.GetToken() != "",
+			Enabled:         edgeCanaryEnabled(edge),
 		},
 	}
-	for _, provider := range s.IPFraudProviders {
+	for _, provider := range settings.GetIpFraudProviders() {
 		out.IpFraudProviders = append(out.IpFraudProviders, &proxyruntimev1.ProxyIPFraudProviderSettingsView{
-			ProviderId:       provider.ID,
-			Weight:           provider.Weight,
-			Kind:             provider.Kind,
-			Anonymous:        provider.Anonymous,
-			ApiKeyConfigured: len(provider.APIKeys) > 0,
-			ApiKeyCount:      uint32(len(provider.APIKeys)),
+			ProviderId:       provider.GetProviderId(),
+			Weight:           provider.GetWeight(),
+			Kind:             provider.GetKind(),
+			Anonymous:        provider.GetAnonymous(),
+			ApiKeyConfigured: len(provider.GetApiKeys()) > 0,
+			ApiKeyCount:      uint32(len(provider.GetApiKeys())),
 		})
 	}
-	for _, provider := range s.DynamicIPProviders {
-		out.DynamicIpProviders = append(out.DynamicIpProviders, provider.toProto())
+	for _, provider := range settings.GetDynamicIpProviders() {
+		out.DynamicIpProviders = append(out.DynamicIpProviders, cloneDynamicIPProvider(provider))
 	}
 	return out
 }
 
-func (s runtimeSettingsFile) signature() string {
-	data, _ := json.Marshal(s)
+func runtimeSettingsSignature(settings *runtimeSettingsFile) string {
+	data, _ := protojsonx.Marshal(normalizeRuntimeSettings(settings))
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
-func (s runtimeSettingsFile) providerSecrets() map[string][]string {
+func providerSecrets(settings *runtimeSettingsFile) map[string][]string {
 	secrets := map[string][]string{}
-	for _, item := range s.IPFraudProviders {
-		secrets[providerSecretKey(item.Kind, item.ID)] = append([]string(nil), item.APIKeys...)
+	for _, item := range normalizeRuntimeSettings(settings).GetIpFraudProviders() {
+		secrets[providerSecretKey(item.GetKind(), item.GetProviderId())] = append([]string(nil), item.GetApiKeys()...)
 	}
 	return secrets
 }
@@ -260,160 +206,198 @@ func providerSecretKey(kind proxyruntimev1.ProxyIPFraudProviderKind, id string) 
 	return fmt.Sprintf("%d:%s", kind, strings.TrimSpace(id))
 }
 
-func (s runtimeSettingsFile) ipFraudProviders() []ipfraud.ProviderConfig {
-	providers := make([]ipfraud.ProviderConfig, 0, len(s.IPFraudProviders))
-	for _, item := range s.IPFraudProviders {
-		provider := ipfraud.ProviderConfig{
-			ID:     item.ID,
-			Kind:   item.Kind,
-			Weight: int(item.Weight),
-			Auth:   item.ipFraudAuth(),
-		}
-		providers = append(providers, provider)
+func ipFraudProviders(settings *runtimeSettingsFile) []ipfraud.ProviderConfig {
+	items := normalizeRuntimeSettings(settings).GetIpFraudProviders()
+	providers := make([]ipfraud.ProviderConfig, 0, len(items))
+	for _, item := range items {
+		providers = append(providers, ipfraud.ProviderConfig{
+			ID:     item.GetProviderId(),
+			Kind:   item.GetKind(),
+			Weight: int(item.GetWeight()),
+			Auth:   ipFraudAuth(item),
+		})
 	}
 	return providers
 }
 
-func (s runtimeSettingsFile) dynamicIPGatewayMap() map[string][]accountproxy.Gateway {
+func dynamicIPGatewayMap(settings *runtimeSettingsFile) map[string][]accountproxy.Gateway {
 	out := map[string][]accountproxy.Gateway{}
-	for _, provider := range s.DynamicIPProviders {
-		out[provider.ProviderID] = provider.gateways()
+	for _, provider := range normalizeRuntimeSettings(settings).GetDynamicIpProviders() {
+		out[provider.GetProviderId()] = accountProxyGateways(provider.GetGateways())
 	}
 	return out
 }
 
-func (s runtimeSettingsFile) dynamicIPGateways(providerID string) []accountproxy.Gateway {
-	return s.dynamicIPGatewayMap()[strings.TrimSpace(providerID)]
+func dynamicIPGateways(settings *runtimeSettingsFile, providerID string) []accountproxy.Gateway {
+	return dynamicIPGatewayMap(settings)[strings.TrimSpace(providerID)]
 }
 
-func (p *ipFraudProviderSetting) normalize() {
-	p.ID = strings.TrimSpace(p.ID)
-	p.APIKeys = cleanList(p.APIKeys)
-	if p.ID == "" {
-		p.ID = ipfraud.DefaultProviderID(p.Kind)
+func ipFraudProviderFromRequest(in *proxyruntimev1.ProxyIPFraudProviderSettings, current map[string][]string, index int) *proxyruntimev1.ProxyIPFraudProviderSettings {
+	if in == nil {
+		return &proxyruntimev1.ProxyIPFraudProviderSettings{}
+	}
+	id := strings.TrimSpace(in.GetProviderId())
+	if id == "" {
+		id = ipfraud.DefaultProviderID(in.GetKind())
+	}
+	apiKeys := cleanList(in.GetApiKeys())
+	if len(apiKeys) == 0 && !in.GetClearApiKeys() && !in.GetAnonymous() {
+		apiKeys = current[providerSecretKey(in.GetKind(), id)]
+	}
+	weight := in.GetWeight()
+	if weight == 0 {
+		weight = providerDefaultWeight(in.GetKind(), index)
+	}
+	return &proxyruntimev1.ProxyIPFraudProviderSettings{ProviderId: id, Weight: weight, Kind: in.GetKind(), Anonymous: in.GetAnonymous(), ApiKeys: apiKeys}
+}
+
+func normalizeIPFraudProvider(provider *proxyruntimev1.ProxyIPFraudProviderSettings, index int) {
+	if provider == nil {
+		return
+	}
+	provider.ProviderId = strings.TrimSpace(provider.GetProviderId())
+	provider.ApiKeys = cleanList(provider.GetApiKeys())
+	if provider.ProviderId == "" {
+		provider.ProviderId = ipfraud.DefaultProviderID(provider.GetKind())
+	}
+	if provider.Weight == 0 {
+		provider.Weight = providerDefaultWeight(provider.GetKind(), index)
 	}
 }
 
-func (p ipFraudProviderSetting) validate(index int) error {
-	if !ipfraud.IsProviderKindSupported(p.Kind) {
+func validateIPFraudProvider(provider *proxyruntimev1.ProxyIPFraudProviderSettings, index int) error {
+	plugin, ok := ipfraud.PluginForKind(provider.GetKind())
+	if !ok {
 		return fmt.Errorf("ip_fraud_providers[%d].kind is required", index)
 	}
-	if p.Anonymous && len(p.APIKeys) > 0 {
+	if provider.GetAnonymous() && len(provider.GetApiKeys()) > 0 {
 		return fmt.Errorf("ip_fraud_providers[%d] must use anonymous or api_keys, not both", index)
 	}
-	if !p.Anonymous && len(p.APIKeys) == 0 {
+	if provider.GetAnonymous() && !plugin.SupportsAnonymous() {
+		return fmt.Errorf("ip_fraud_providers[%d] does not support anonymous mode", index)
+	}
+	if !provider.GetAnonymous() && !plugin.SupportsAPIKey() {
+		return fmt.Errorf("ip_fraud_providers[%d] does not support api key mode", index)
+	}
+	if !provider.GetAnonymous() && len(provider.GetApiKeys()) == 0 {
 		return fmt.Errorf("ip_fraud_providers[%d].api_keys is required when anonymous is false", index)
 	}
 	return nil
 }
 
-func (p ipFraudProviderSetting) ipFraudAuth() ipfraud.AuthConfig {
-	if p.Anonymous {
+func supportedIPFraudProviders(providers []*proxyruntimev1.ProxyIPFraudProviderSettings) []*proxyruntimev1.ProxyIPFraudProviderSettings {
+	out := make([]*proxyruntimev1.ProxyIPFraudProviderSettings, 0, len(providers))
+	for _, provider := range providers {
+		if ipfraud.IsProviderKindSupported(provider.GetKind()) {
+			out = append(out, provider)
+		}
+	}
+	return out
+}
+
+func ipFraudAuth(provider *proxyruntimev1.ProxyIPFraudProviderSettings) ipfraud.AuthConfig {
+	if provider.GetAnonymous() {
 		return ipfraud.AuthConfig{Anonymous: &ipfraud.AnonymousAuthConfig{}}
 	}
-	plugin, ok := ipfraud.PluginForKind(p.Kind)
+	plugin, ok := ipfraud.PluginForKind(provider.GetKind())
 	if !ok {
 		return ipfraud.AuthConfig{}
 	}
-	return plugin.Auth(p.APIKeys, false)
+	return plugin.Auth(provider.GetApiKeys(), false)
 }
 
-func dynamicIPProviderFromProto(in *proxyruntimev1.ProxyDynamicIPProviderSettings) dynamicIPProviderSetting {
+func dynamicIPProviderFromProto(in *proxyruntimev1.ProxyDynamicIPProviderSettings) *proxyruntimev1.ProxyDynamicIPProviderSettings {
 	if in == nil {
-		return dynamicIPProviderSetting{}
+		return &proxyruntimev1.ProxyDynamicIPProviderSettings{}
 	}
-	item := dynamicIPProviderSetting{ProviderID: strings.TrimSpace(in.GetProviderId()), Gateways: make([]dynamicIPGatewaySetting, 0, len(in.GetGateways()))}
+	out := &proxyruntimev1.ProxyDynamicIPProviderSettings{ProviderId: strings.TrimSpace(in.GetProviderId()), Gateways: make([]*proxyruntimev1.ProxyDynamicIPGatewaySettings, 0, len(in.GetGateways()))}
 	for _, gateway := range in.GetGateways() {
-		item.Gateways = append(item.Gateways, dynamicIPGatewayFromProto(gateway))
+		out.Gateways = append(out.Gateways, dynamicIPGatewayFromProto(gateway))
 	}
-	return item
+	normalizeDynamicIPProvider(out)
+	return out
 }
 
-func dynamicIPGatewayFromProto(in *proxyruntimev1.ProxyDynamicIPGatewaySettings) dynamicIPGatewaySetting {
+func dynamicIPGatewayFromProto(in *proxyruntimev1.ProxyDynamicIPGatewaySettings) *proxyruntimev1.ProxyDynamicIPGatewaySettings {
 	if in == nil {
-		return dynamicIPGatewaySetting{}
+		return &proxyruntimev1.ProxyDynamicIPGatewaySettings{}
 	}
-	return dynamicIPGatewaySetting{
-		GatewayID:       strings.TrimSpace(in.GetGatewayId()),
+	out := &proxyruntimev1.ProxyDynamicIPGatewaySettings{
+		GatewayId:       strings.TrimSpace(in.GetGatewayId()),
 		DisplayName:     strings.TrimSpace(in.GetDisplayName()),
 		Addr:            strings.TrimSpace(in.GetAddr()),
 		RegionCodes:     cleanRegionCodes(in.GetRegionCodes()),
 		Protocols:       cleanProtocols(in.GetProtocols()),
 		DefaultProtocol: in.GetDefaultProtocol(),
 	}
+	return out
 }
 
-func (p *dynamicIPProviderSetting) normalize() {
-	p.ProviderID = strings.TrimSpace(p.ProviderID)
-	for index := range p.Gateways {
-		p.Gateways[index].normalize(index)
+func normalizeDynamicIPProvider(provider *proxyruntimev1.ProxyDynamicIPProviderSettings) {
+	if provider == nil {
+		return
+	}
+	provider.ProviderId = strings.TrimSpace(provider.GetProviderId())
+	for index := range provider.Gateways {
+		normalizeDynamicIPGateway(provider.Gateways[index], index)
 	}
 }
 
-func (p dynamicIPProviderSetting) validate(index int) error {
-	if !accountproxy.IsSupported(p.ProviderID) {
+func validateDynamicIPProvider(provider *proxyruntimev1.ProxyDynamicIPProviderSettings, index int) error {
+	if !accountproxy.IsSupported(provider.GetProviderId()) {
 		return fmt.Errorf("dynamic_ip_providers[%d].provider_id is unsupported", index)
 	}
 	seen := map[string]struct{}{}
-	for gatewayIndex, gateway := range p.Gateways {
-		if gateway.Addr == "" {
+	for gatewayIndex, gateway := range provider.GetGateways() {
+		if strings.TrimSpace(gateway.GetAddr()) == "" {
 			return fmt.Errorf("dynamic_ip_providers[%d].gateways[%d].addr is required", index, gatewayIndex)
 		}
-		if _, exists := seen[gateway.GatewayID]; exists {
-			return fmt.Errorf("dynamic_ip_providers[%d].gateways[%d] duplicates gateway %q", index, gatewayIndex, gateway.GatewayID)
+		if _, exists := seen[gateway.GetGatewayId()]; exists {
+			return fmt.Errorf("dynamic_ip_providers[%d].gateways[%d] duplicates gateway %q", index, gatewayIndex, gateway.GetGatewayId())
 		}
-		seen[gateway.GatewayID] = struct{}{}
+		seen[gateway.GetGatewayId()] = struct{}{}
 	}
 	return nil
 }
 
-func (p dynamicIPProviderSetting) toProto() *proxyruntimev1.ProxyDynamicIPProviderSettings {
-	out := &proxyruntimev1.ProxyDynamicIPProviderSettings{ProviderId: p.ProviderID}
-	for _, gateway := range p.Gateways {
-		out.Gateways = append(out.Gateways, gateway.toProto())
+func normalizeDynamicIPGateway(gateway *proxyruntimev1.ProxyDynamicIPGatewaySettings, index int) {
+	if gateway == nil {
+		return
+	}
+	gateway.GatewayId = strings.TrimSpace(gateway.GetGatewayId())
+	if gateway.GatewayId == "" {
+		gateway.GatewayId = fmt.Sprintf("gateway-%d", index+1)
+	}
+	gateway.DisplayName = strings.TrimSpace(gateway.GetDisplayName())
+	gateway.Addr = strings.TrimSpace(gateway.GetAddr())
+	gateway.RegionCodes = cleanRegionCodes(gateway.GetRegionCodes())
+	gateway.Protocols = cleanProtocols(gateway.GetProtocols())
+}
+
+func accountProxyGateways(gateways []*proxyruntimev1.ProxyDynamicIPGatewaySettings) []accountproxy.Gateway {
+	out := make([]accountproxy.Gateway, 0, len(gateways))
+	for _, gateway := range gateways {
+		out = append(out, accountproxy.Gateway{
+			ID:               gateway.GetGatewayId(),
+			DisplayName:      gateway.GetDisplayName(),
+			Addr:             gateway.GetAddr(),
+			DefaultProtocol:  configuredProtocolName(gateway.GetDefaultProtocol()),
+			Protocols:        protocolNames(gateway.GetProtocols()),
+			PreferredRegions: gateway.GetRegionCodes(),
+		})
 	}
 	return out
 }
 
-func (p dynamicIPProviderSetting) gateways() []accountproxy.Gateway {
-	out := make([]accountproxy.Gateway, 0, len(p.Gateways))
-	for _, gateway := range p.Gateways {
-		out = append(out, gateway.gateway())
+func cloneEdgeCanary(in *proxyruntimev1.ProxyEdgeCanarySettings) *proxyruntimev1.ProxyEdgeCanarySettings {
+	if in == nil {
+		return nil
 	}
-	return out
+	return &proxyruntimev1.ProxyEdgeCanarySettings{Url: in.GetUrl(), Token: in.GetToken(), ClearToken: in.GetClearToken(), Enabled: in.GetEnabled()}
 }
 
-func (g *dynamicIPGatewaySetting) normalize(index int) {
-	g.GatewayID = strings.TrimSpace(g.GatewayID)
-	if g.GatewayID == "" {
-		g.GatewayID = fmt.Sprintf("gateway-%d", index+1)
-	}
-	g.DisplayName = strings.TrimSpace(g.DisplayName)
-	g.Addr = strings.TrimSpace(g.Addr)
-	g.RegionCodes = cleanRegionCodes(g.RegionCodes)
-	g.Protocols = cleanProtocols(g.Protocols)
-}
-
-func (g dynamicIPGatewaySetting) toProto() *proxyruntimev1.ProxyDynamicIPGatewaySettings {
-	return &proxyruntimev1.ProxyDynamicIPGatewaySettings{
-		GatewayId:       g.GatewayID,
-		DisplayName:     g.DisplayName,
-		Addr:            g.Addr,
-		RegionCodes:     g.RegionCodes,
-		Protocols:       g.Protocols,
-		DefaultProtocol: g.DefaultProtocol,
-	}
-}
-
-func (g dynamicIPGatewaySetting) gateway() accountproxy.Gateway {
-	return accountproxy.Gateway{
-		ID:               g.GatewayID,
-		DisplayName:      g.DisplayName,
-		Addr:             g.Addr,
-		DefaultProtocol:  configuredProtocolName(g.DefaultProtocol),
-		Protocols:        protocolNames(g.Protocols),
-		PreferredRegions: g.RegionCodes,
-	}
+func cloneDynamicIPProvider(in *proxyruntimev1.ProxyDynamicIPProviderSettings) *proxyruntimev1.ProxyDynamicIPProviderSettings {
+	return dynamicIPProviderFromProto(in)
 }
 
 func cleanList(values []string) []string {

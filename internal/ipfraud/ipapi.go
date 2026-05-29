@@ -43,6 +43,9 @@ func (p *ipapiProvider) lookup(ctx context.Context, ip string) (report, error) {
 	if err != nil {
 		return report{}, err
 	}
+	if stringValue(payload, "error") != "" {
+		return report{}, errProviderUnavailable
+	}
 	return parseIPAPI(payload), nil
 }
 
@@ -65,24 +68,9 @@ func parseIPAPI(payload map[string]any) report {
 	if !ok {
 		score = scoreFromFlags(flags)
 	}
-	networkKind := classifyNetworkKind(
+	networkKind := networkKindWithFlags(classifyNetworkKind(
 		stringValue(payload, "company.type", "asn.type", "connection_type", "type"),
-	)
-	if flags.datacenter || flags.hosting {
-		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_DATACENTER)
-	}
-	if flags.mobile {
-		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_MOBILE)
-	}
-	if flags.satellite {
-		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_SATELLITE)
-	}
-	if flags.broadcast {
-		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_BROADCAST)
-	}
-	if flags.anycast {
-		networkKind = chooseNetworkKind(networkKind, proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_ANYCAST)
-	}
+	), flags)
 	return report{
 		networkKind:    networkKind,
 		anonymizerKind: classifyAnonymizerKind(flags.tor, flags.vpn, flags.proxy, flags.crawler),

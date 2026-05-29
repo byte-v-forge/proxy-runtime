@@ -14,6 +14,7 @@ type Driver interface {
 	Reconcile(ctx context.Context, cfg Config) ([]provider.Node, error)
 	Sources(ctx context.Context) ([]*proxyruntimev1.ProxySourceDescriptor, error)
 	SourceNodes(ctx context.Context, sourceID string) ([]*proxyruntimev1.ProxySourceNode, error)
+	ResolveNodePublicIP(ctx context.Context, sourceID string, nodeID string, nodeDisplayName string) (string, error)
 	UpsertSubscriptionSource(ctx context.Context, req *proxyruntimev1.UpsertProxySubscriptionSourceRequest) (*proxyruntimev1.ProxySourceDescriptor, error)
 	UpsertFixedSource(ctx context.Context, req *proxyruntimev1.UpsertProxyFixedSourceRequest) (*proxyruntimev1.ProxySourceDescriptor, error)
 	DeleteSource(ctx context.Context, sourceID string) error
@@ -74,6 +75,9 @@ func (Empty) Sources(context.Context) ([]*proxyruntimev1.ProxySourceDescriptor, 
 }
 func (Empty) SourceNodes(context.Context, string) ([]*proxyruntimev1.ProxySourceNode, error) {
 	return nil, nil
+}
+func (Empty) ResolveNodePublicIP(context.Context, string, string, string) (string, error) {
+	return "", nil
 }
 func (Empty) UpsertSubscriptionSource(context.Context, *proxyruntimev1.UpsertProxySubscriptionSourceRequest) (*proxyruntimev1.ProxySourceDescriptor, error) {
 	return nil, errors.New("source runtime is disabled")
