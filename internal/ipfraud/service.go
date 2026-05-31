@@ -14,7 +14,7 @@ import (
 )
 
 type Service struct {
-	providers []provider
+	providers []providerEntry
 	cacheTTL  time.Duration
 	logger    *slog.Logger
 
@@ -25,6 +25,12 @@ type Service struct {
 type cacheEntry struct {
 	check     *proxyruntimev1.ProxyIPFraudCheck
 	expiresAt time.Time
+}
+
+type providerEntry struct {
+	id          string
+	displayName string
+	checker     provider
 }
 
 func NewService(cfg Config, logger *slog.Logger) *Service {
@@ -41,13 +47,21 @@ func NewService(cfg Config, logger *slog.Logger) *Service {
 		return cfg.Providers[i].Weight > cfg.Providers[j].Weight
 	})
 	client := &http.Client{Timeout: cfg.Timeout}
-	providers := make([]provider, 0, len(cfg.Providers))
+	providers := make([]providerEntry, 0, len(cfg.Providers))
 	for _, item := range cfg.Providers {
 		plugin, ok := PluginForKind(item.Kind)
 		if !ok {
 			continue
 		}
-		providers = append(providers, plugin.New(client, item, cfg.KeyCooldown))
+		providerID := strings.TrimSpace(item.ID)
+		if providerID == "" {
+			providerID = plugin.ProviderID()
+		}
+		providers = append(providers, providerEntry{
+			id:          providerID,
+			displayName: plugin.DisplayName(),
+			checker:     plugin.New(client, item, cfg.KeyCooldown),
+		})
 	}
 	return &Service{
 		providers: providers,
@@ -67,11 +81,13 @@ func (s *Service) Check(ctx context.Context, ip string) (*proxyruntimev1.ProxyIP
 	}
 	reports := make([]report, 0, len(s.providers))
 	for _, item := range s.providers {
-		result, err := item.lookup(ctx, ip)
+		result, err := item.checker.lookup(ctx, ip)
 		if err != nil {
 			s.logger.Debug("IP fraud provider unavailable")
 			continue
 		}
+		result.providerID = item.id
+		result.providerName = item.displayName
 		reports = append(reports, result)
 	}
 	errorMessage := ""

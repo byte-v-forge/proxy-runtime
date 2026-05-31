@@ -20,21 +20,25 @@ export type DynamicGatewayForm = {
   default_protocol?: ProxyProtocol;
 };
 export type DynamicProviderForm = { provider_id: string; gateways: DynamicGatewayForm[] };
-export type RuntimeSettingsForm = { edgeEnabled: boolean; edgeUrl: string; edgeToken: string; providers: ProviderForm[]; dynamicProviders: DynamicProviderForm[] };
+export type RuntimeSettingsForm = { edgeEnabled: boolean; edgeUrl: string; edgeToken: string; proxyExitIpTimeoutSeconds: number; providers: ProviderForm[]; dynamicProviders: DynamicProviderForm[] };
 
 const ipapiKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IPAPI;
 const ipinfoKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IPINFO;
 const ip2LocationKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IP2LOCATION;
 const ipAPIComKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IP_API_COM;
+const ipQualityScoreKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_IPQUALITYSCORE;
+const abuseIPDBKind = ProxyIPFraudProviderKind.PROXY_IP_FRAUD_PROVIDER_KIND_ABUSEIPDB;
 
 export const fallbackProviderCatalog: ProxyIPFraudProviderDescriptor[] = [
+  providerDescriptor('ipqualityscore', 'IPQualityScore', ipQualityScoreKind, 95, false, true),
   providerDescriptor('ipapi', 'ipapi.is', ipapiKind, 100, true, true),
   providerDescriptor('ipinfo', 'IPinfo', ipinfoKind, 90, false, true),
+  providerDescriptor('abuseipdb', 'AbuseIPDB', abuseIPDBKind, 85, false, true),
   providerDescriptor('ip2location', 'IP2Location.io', ip2LocationKind, 80, true, true),
   providerDescriptor('ip-api-com', 'IP-API.com', ipAPIComKind, 40, true, false)
 ];
 
-export const defaultSettingsForm: RuntimeSettingsForm = { edgeEnabled: false, edgeUrl: '', edgeToken: '', providers: [], dynamicProviders: [] };
+export const defaultSettingsForm: RuntimeSettingsForm = { edgeEnabled: false, edgeUrl: '', edgeToken: '', proxyExitIpTimeoutSeconds: 5, providers: [], dynamicProviders: [] };
 export const providerCatalogFrom = (providers?: ProxyIPFraudProviderDescriptor[]) => providers?.length ? providers : fallbackProviderCatalog;
 export function providerDefaults(kind: ProxyIPFraudProviderKind, catalog = fallbackProviderCatalog): ProviderForm {
   const item = catalog.find((provider) => provider.kind === kind) || catalog[0];
@@ -42,7 +46,7 @@ export function providerDefaults(kind: ProxyIPFraudProviderKind, catalog = fallb
 }
 
 export function formFromSettings(settings: ProxyRuntimeSettings | undefined, catalog = fallbackProviderCatalog): RuntimeSettingsForm {
-  return { edgeEnabled: !!settings?.edge_canary?.enabled, edgeUrl: settings?.edge_canary?.url || '', edgeToken: '', providers: (settings?.ip_fraud_providers || []).map((provider) => ({
+  return { edgeEnabled: !!settings?.edge_canary?.enabled, edgeUrl: settings?.edge_canary?.url || '', edgeToken: '', proxyExitIpTimeoutSeconds: durationSeconds(settings?.check_settings?.proxy_exit_ip_timeout), providers: (settings?.ip_fraud_providers || []).map((provider) => ({
     id: provider.provider_id || providerDefaults(provider.kind, catalog).id,
     kind: provider.kind,
     mode: provider.anonymous ? 'anonymous' : 'api_keys',
@@ -52,7 +56,7 @@ export function formFromSettings(settings: ProxyRuntimeSettings | undefined, cat
 }
 
 export function requestFromSettingsForm(values: RuntimeSettingsForm): UpdateProxyRuntimeSettingsRequest {
-  return { edge_canary: { enabled: values.edgeEnabled, url: values.edgeUrl.trim(), token: values.edgeToken.trim(), clear_token: false }, ip_fraud_providers: values.providers.map(providerRequest), dynamic_ip_providers: values.dynamicProviders.map(dynamicProviderRequest) };
+  return { edge_canary: { enabled: values.edgeEnabled, url: values.edgeUrl.trim(), token: values.edgeToken.trim(), clear_token: false }, ip_fraud_providers: values.providers.map(providerRequest), dynamic_ip_providers: values.dynamicProviders.map(dynamicProviderRequest), check_settings: { proxy_exit_ip_timeout: `${positiveSeconds(values.proxyExitIpTimeoutSeconds)}s` } };
 }
 
 function providerRequest(provider: ProviderForm): ProxyIPFraudProviderSettings {
@@ -65,6 +69,15 @@ function providerDescriptor(provider_id: string, display_name: string, kind: Pro
 
 function splitKeys(value: string) {
   return value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function durationSeconds(value: string | undefined) {
+  const match = String(value || '').match(/^(\d+(?:\.\d+)?)s$/);
+  return positiveSeconds(match ? Number(match[1]) : 5);
+}
+
+function positiveSeconds(value: number) {
+  return Math.max(1, Math.round(Number(value) || 5));
 }
 
 function dynamicProviderForm(provider: ProxyDynamicIPProviderSettings): DynamicProviderForm {

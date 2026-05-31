@@ -12,6 +12,27 @@ func validateConfig(cfg Config, definition Definition) error {
 	if strings.TrimSpace(cfg.Username) == "" || strings.TrimSpace(cfg.Password) == "" {
 		return errors.New("username and password are required")
 	}
+	if err := validateProtocol(definition.DefaultProtocol); err != nil {
+		return err
+	}
+	for _, protocol := range definition.Protocols {
+		if err := validateProtocol(protocol); err != nil {
+			return err
+		}
+	}
+	for index, gateway := range cfg.Gateways {
+		if strings.TrimSpace(gateway.Addr) == "" {
+			return fmt.Errorf("gateways[%d].addr is required", index)
+		}
+		if err := validateProtocol(gateway.DefaultProtocol); err != nil {
+			return err
+		}
+		for _, protocol := range gateway.Protocols {
+			if err := validateProtocol(protocol); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

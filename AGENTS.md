@@ -13,3 +13,4 @@
 - 日志、指标和错误信息不得输出代理密码、API 链接 token、用户名中的可复用会话材料或完整代理 URL。
 - 后端优先使用 Go，按 Clean Code、DI 和面向抽象设计组织代码。
 - 本仓不保留公开 proto 生成物；公开 Go 契约生成物来自 `common-lib/gen/go/byte/v/forge/contracts/proxyruntime/v1/`。
+- Linter 检查必须达到 0 error / 0 warning；禁止通过修改或放宽 linter 配置、降低规则级别、删除规则、添加 ignore/disable/nolint/ts-ignore/eslint-disable/biome-ignore/prettier-ignore 等方式绕过问题，只能按 linter 规则修复源码、类型、格式或依赖边界。

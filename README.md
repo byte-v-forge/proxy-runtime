@@ -143,11 +143,10 @@ curl -X POST http://127.0.0.1:8080/proxy/leases/acquire \
 - `PROXY_RUNTIME_PROVIDER`：provider 名称，支持 `1024proxy`、`static`、`none`，默认 `1024proxy`。
 - `PROXY_RUNTIME_REFRESH_SECONDS`：代理池刷新周期，默认 `300`。
 - `PROXY_RUNTIME_REQUEST_TIMEOUT_SECONDS`：provider HTTP 请求超时，默认 `10`。
-- `PROXY_RUNTIME_PROXY_EXIT_GEO_TIMEOUT_SECONDS`：代理出口 IP 探测超时，默认 `2`。
 - `PROXY_RUNTIME_PROXY_EXIT_GEO_URLS`：代理出口 IP 探测端点列表，默认使用多个公开出口 IP 探测服务并取最快成功结果。
 - `PROXY_RUNTIME_IP_FRAUD_CACHE_TTL_SECONDS` / `PROXY_RUNTIME_IP_FRAUD_KEY_COOLDOWN_SECONDS`：IP 欺诈结果缓存和额度耗尽 key 冷却时间。
 
-IP 欺诈 provider 与 Cloudflare canary 通过 dashboard「配置」页或 `GET/PUT /proxy/settings` 管理，持久化到 proxy-runtime 控制面 PG；查询接口只返回密钥是否已配置。IP 欺诈 provider 采用添加式配置，只暴露 provider、API Key/匿名模式和权重；provider URL 属于 adapter 内部实现细节，不进入公共配置。Cloudflare canary 使用显式 `enabled` 开关；关闭只停用检测，不删除已保存 URL/token。未启用 canary、未配置 canary token 或未配置 IP 欺诈 provider 时，对应检查返回 `unsupported`。
+IP 欺诈 provider、Cloudflare canary 与代理出口 IP 探测超时通过 dashboard「配置」页或 `GET/PUT /proxy/settings` 管理，持久化到 proxy-runtime 控制面 PG；查询接口只返回密钥是否已配置。IP 欺诈 provider 采用添加式配置，只暴露 provider、API Key/匿名模式和权重；provider URL 属于 adapter 内部实现细节，不进入公共配置。Cloudflare canary 使用显式 `enabled` 开关；关闭只停用检测，不删除已保存 URL/token。代理出口 IP 探测超时默认 `5s`。未启用 canary、未配置 canary token 或未配置 IP 欺诈 provider 时，对应检查返回 `unsupported`。
 
 `PUT /proxy/settings` 示例：
 
@@ -159,10 +158,15 @@ IP 欺诈 provider 与 Cloudflare canary 通过 dashboard「配置」页或 `GET
     "token": "change-me"
   },
   "ip_fraud_providers": [
+    {"provider_id":"ipqualityscore","weight":95,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IPQUALITYSCORE","api_keys":["key-a","key-b"]},
     {"provider_id":"ipapi","weight":100,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IPAPI","api_keys":["key-a","key-b"]},
+    {"provider_id":"abuseipdb","weight":85,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_ABUSEIPDB","api_keys":["key-a","key-b"]},
     {"provider_id":"ip2location","weight":80,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IP2LOCATION","anonymous":true},
     {"provider_id":"ip-api-com","weight":40,"kind":"PROXY_IP_FRAUD_PROVIDER_KIND_IP_API_COM","anonymous":true}
-  ]
+  ],
+  "check_settings": {
+    "proxy_exit_ip_timeout": "5s"
+  }
 }
 ```
 

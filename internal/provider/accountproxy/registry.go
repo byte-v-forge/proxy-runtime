@@ -29,6 +29,11 @@ func IsSupported(providerID string) bool {
 	return ok
 }
 
+func SupportsRuntimeGeoTargeting(providerID string) bool {
+	plugin, ok := Get(providerID)
+	return ok && plugin.SupportsRuntimeGeoTargeting()
+}
+
 func Descriptors(gateways map[string][]Gateway) []*proxyruntimev1.ProxyProviderDescriptor {
 	ids := providerIDs()
 	out := make([]*proxyruntimev1.ProxyProviderDescriptor, 0, len(ids))

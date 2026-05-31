@@ -21,7 +21,9 @@ func classifyNetworkKind(values ...string) proxyruntimev1.ProxyIPNetworkKind {
 		return proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_BROADCAST
 	case strings.Contains(value, "anycast"):
 		return proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_ANYCAST
-	case strings.Contains(value, "business") || strings.Contains(value, "enterprise") || strings.Contains(value, "corporate"):
+	case strings.Contains(value, "business") || strings.Contains(value, "enterprise") || strings.Contains(value, "corporate") ||
+		strings.Contains(value, "commercial") || strings.Contains(value, "organization") || strings.Contains(value, "government") ||
+		strings.Contains(value, "military") || strings.Contains(value, "university") || strings.Contains(value, "library"):
 		return proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_BUSINESS
 	case strings.Contains(value, "isp") || strings.Contains(value, "fixed line") || strings.Contains(value, "cable") || strings.Contains(value, "dsl"):
 		return proxyruntimev1.ProxyIPNetworkKind_PROXY_IP_NETWORK_KIND_ISP

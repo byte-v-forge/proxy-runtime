@@ -24,9 +24,16 @@ func mergeReports(ip string, reports []report, errorMessage string) *proxyruntim
 	for _, item := range reports {
 		check.NetworkKind = chooseNetworkKind(check.GetNetworkKind(), item.networkKind)
 		check.AnonymizerKind = chooseAnonymizerKind(check.GetAnonymizerKind(), item.anonymizerKind)
-		check.RiskLevel = chooseRiskLevel(check.GetRiskLevel(), normalizeRiskLevel(item.riskLevel, item.riskScore))
+		nextRiskLevel := normalizeRiskLevel(item.riskLevel, item.riskScore)
+		if riskRank(nextRiskLevel) > riskRank(check.GetRiskLevel()) {
+			check.ProviderId = item.providerID
+			check.ProviderDisplayName = item.providerName
+		}
+		check.RiskLevel = chooseRiskLevel(check.GetRiskLevel(), nextRiskLevel)
 		if item.riskScore > check.RiskScore {
 			check.RiskScore = clampScore(item.riskScore)
+			check.ProviderId = item.providerID
+			check.ProviderDisplayName = item.providerName
 		}
 		for _, signal := range item.signals {
 			if signal != proxyruntimev1.ProxyIPFraudSignal_PROXY_IP_FRAUD_SIGNAL_UNSPECIFIED {
@@ -39,6 +46,15 @@ func mergeReports(ip string, reports []report, errorMessage string) *proxyruntim
 		assignFirst(&check.Asn, item.asn)
 		assignFirst(&check.Organization, item.organization)
 		assignFirst(&check.Isp, item.isp)
+	}
+	if strings.TrimSpace(check.GetProviderId()) == "" {
+		for _, item := range reports {
+			assignFirst(&check.ProviderId, item.providerID)
+			assignFirst(&check.ProviderDisplayName, item.providerName)
+			if check.GetProviderId() != "" || check.GetProviderDisplayName() != "" {
+				break
+			}
+		}
 	}
 	check.RiskSignals = sortedSignals(signals)
 	if check.GetAnonymizerKind() == proxyruntimev1.ProxyIPAnonymizerKind_PROXY_IP_ANONYMIZER_KIND_UNKNOWN && len(check.GetRiskSignals()) == 0 {

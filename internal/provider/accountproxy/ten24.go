@@ -9,6 +9,7 @@ func init() {
 		DefaultProtocol:          "socks5",
 		Protocols:                []string{"http", "socks5"},
 		UsernameParameterSession: true,
+		RuntimeGeoTargeting:      true,
 		BuildUsername:            ten24Username,
 	})
 }

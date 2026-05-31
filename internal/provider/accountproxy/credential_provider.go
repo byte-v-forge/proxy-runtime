@@ -3,7 +3,6 @@ package accountproxy
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -17,14 +16,10 @@ import (
 type CredentialProvider struct {
 	cfg        Config
 	definition Definition
-	httpClient *http.Client
 }
 
-func NewCredentialProvider(cfg Config, definition Definition, client *http.Client) *CredentialProvider {
-	if client == nil {
-		client = http.DefaultClient
-	}
-	return &CredentialProvider{cfg: cfg, definition: definition, httpClient: client}
+func NewCredentialProvider(cfg Config, definition Definition) *CredentialProvider {
+	return &CredentialProvider{cfg: cfg, definition: definition}
 }
 
 func (p *CredentialProvider) Name() string { return p.definition.ProviderID }
@@ -57,12 +52,19 @@ func (p *CredentialProvider) CreateSession(_ context.Context, req *proxyruntimev
 	}
 	policy.UpstreamKind = proxyruntimev1.ProxyUpstreamKind_PROXY_UPSTREAM_KIND_DYNAMIC_IP
 	policy.RotationMode = proxyruntimev1.ProxyRotationMode_PROXY_ROTATION_MODE_STICKY_SESSION
-	sessionID, err := randx.Hex(8)
+	sessionID, err := p.sessionID()
 	if err != nil {
 		return nil, fmt.Errorf("generate proxy session id: %w", err)
 	}
 	now := time.Now().UTC()
 	return &proxyruntimev1.ProxySession{SessionId: sessionID, ProviderId: p.Name(), Policy: policy, CreatedAt: timestamppb.New(now), ExpiresAt: timestamppb.New(now.Add(policyStickyTTL(policy))), AccountId: strings.TrimSpace(req.GetAccountId()), Purpose: strings.TrimSpace(req.GetPurpose()), Labels: sessionLabels(p.definition)}, nil
+}
+
+func (p *CredentialProvider) sessionID() (string, error) {
+	if p.definition.GenerateSessionID != nil {
+		return p.definition.GenerateSessionID()
+	}
+	return randx.Hex(8)
 }
 
 func (p *CredentialProvider) node(session *proxyruntimev1.ProxySession) (provider.Node, error) {

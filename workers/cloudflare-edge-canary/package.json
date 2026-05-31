@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "lint": "eslint ."
   },
   "devDependencies": {
-    "wrangler": "^4.92.0"
+    "wrangler": "^4.92.0",
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0"
   }
 }

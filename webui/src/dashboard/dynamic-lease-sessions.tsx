@@ -17,7 +17,7 @@ function LeaseCard({ lease }: { lease: ProxyDynamicLease }) {
     </header>
     <div className="proxyLeaseFacts">
       <LeaseFact label="Chain" value={chainText(hops)} />
-      <LeaseFact label="Gateway" value={gateway ? `${gateway.provider_id}/${gateway.gateway_id}` : '-'} />
+      <LeaseFact label="网关" value={gateway ? `${gateway.provider_id}/${gateway.gateway_id}` : '-'} />
       <LeaseFact label="Egress" value={endpointAddr(lease.egress?.host || '', lease.egress?.port || 0)} />
       <LeaseFact label="Expires" value={formatTime(lease.expires_at)} />
     </div>

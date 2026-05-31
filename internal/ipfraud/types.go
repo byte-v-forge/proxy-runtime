@@ -47,6 +47,8 @@ type Plugin interface {
 }
 
 type report struct {
+	providerID     string
+	providerName   string
 	networkKind    proxyruntimev1.ProxyIPNetworkKind
 	anonymizerKind proxyruntimev1.ProxyIPAnonymizerKind
 	riskLevel      proxyruntimev1.ProxyIPFraudRiskLevel

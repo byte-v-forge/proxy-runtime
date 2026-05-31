@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	proxyruntimev1 "github.com/byte-v-forge/common-lib/gen/go/byte/v/forge/contracts/proxyruntime/v1"
+	"github.com/byte-v-forge/common-lib/randx"
 )
 
 func passthroughUsername(base string, _ *proxyruntimev1.ProxySessionPolicy, _ string) string {
@@ -34,4 +35,8 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func numericSessionID() (string, error) {
+	return randx.String("0123456789", 8)
 }

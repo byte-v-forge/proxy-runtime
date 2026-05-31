@@ -105,9 +105,7 @@ func GatewayProtocol(gateway Gateway, fallback string) string {
 
 func GatewayProtocolForProvider(providerID string, gateway Gateway) string {
 	if plugin, ok := Get(providerID); ok {
-		if definition, ok := plugin.(definitionPlugin); ok {
-			return gatewayProtocol(gateway, definition.definition.DefaultProtocol)
-		}
+		return plugin.GatewayProtocol(gateway)
 	}
 	return gatewayProtocol(gateway, "socks5")
 }

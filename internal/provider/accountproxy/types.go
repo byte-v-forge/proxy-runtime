@@ -38,11 +38,14 @@ type Plugin interface {
 	DisplayName() string
 	Descriptor(gateways []Gateway) *proxyruntimev1.ProxyProviderDescriptor
 	DynamicSource(accountID string, displayName string, gateways []Gateway) *proxyruntimev1.ProxySourceDescriptor
+	GatewayProtocol(gateway Gateway) string
+	SupportsRuntimeGeoTargeting() bool
 	NewProvider(cfg Config, client *http.Client) (provider.Provider, error)
 	Validate(cfg Config) error
 }
 
 type UsernameBuilder func(base string, policy *proxyruntimev1.ProxySessionPolicy, sessionID string) string
+type SessionIDGenerator func() (string, error)
 
 type Definition struct {
 	ProviderID               string
@@ -51,5 +54,7 @@ type Definition struct {
 	Protocols                []string
 	Gateways                 []Gateway
 	UsernameParameterSession bool
+	RuntimeGeoTargeting      bool
 	BuildUsername            UsernameBuilder
+	GenerateSessionID        SessionIDGenerator
 }
